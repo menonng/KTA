@@ -10,6 +10,10 @@ export class Game {
      */
     build_prop_cell(cx: number, cz: number): Uint32Array;
     building_count(): number;
+    /**
+     * Camera collision: free fraction of target -> camera (1 = clear).
+     */
+    camera_clear(tx: number, ty: number, tz: number, cx: number, cy: number, cz: number): number;
     chunk_bounds(i: number): Float32Array;
     chunk_count(): number;
     /**
@@ -65,6 +69,10 @@ export class Game {
      */
     skirt_desc(): Uint32Array;
     spawn(x: number, z: number): void;
+    /**
+     * [pos_ptr, pos_len, alpha_ptr, alpha_len, idx_ptr, idx_len] for night light spill.
+     */
+    spill_desc(): Uint32Array;
     step(dt: number, bits: number, fx: number, fz: number): void;
     /**
      * Wire line segments: x0, y0, z0, x1, y1, z1, ...
@@ -79,6 +87,7 @@ export interface InitOutput {
     readonly __wbg_game_free: (a: number, b: number) => void;
     readonly game_build_prop_cell: (a: number, b: number, c: number) => [number, number];
     readonly game_building_count: (a: number) => number;
+    readonly game_camera_clear: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => number;
     readonly game_chunk_bounds: (a: number, b: number) => [number, number];
     readonly game_chunk_count: (a: number) => number;
     readonly game_chunk_desc: (a: number, b: number) => [number, number];
@@ -98,6 +107,7 @@ export interface InitOutput {
     readonly game_signs: (a: number) => [number, number];
     readonly game_skirt_desc: (a: number) => [number, number];
     readonly game_spawn: (a: number, b: number, c: number) => void;
+    readonly game_spill_desc: (a: number) => [number, number];
     readonly game_step: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly game_wires: (a: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;

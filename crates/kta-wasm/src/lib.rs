@@ -107,6 +107,11 @@ impl Game {
         self.w.step(dt, bits, [fx, fz]);
     }
 
+    /// Camera collision: free fraction of target -> camera (1 = clear).
+    pub fn camera_clear(&self, tx: f32, ty: f32, tz: f32, cx: f32, cy: f32, cz: f32) -> f32 {
+        self.w.camera_clear([tx, ty, tz], [cx, cy, cz])
+    }
+
     /// Pointer to 6 floats: x, y, z, yaw, speed, phase.
     pub fn player_ptr(&self) -> u32 {
         ptr(&self.w.player.state)
@@ -156,6 +161,12 @@ impl Game {
     /// [pos_ptr, pos_len, alpha_ptr, alpha_len, idx_ptr, idx_len] for ground contact shadows.
     pub fn skirt_desc(&self) -> Vec<u32> {
         let s = &self.w.skirt;
+        vec![ptr(&s.0), s.0.len() as u32, ptr(&s.1), s.1.len() as u32, ptr(&s.2), s.2.len() as u32]
+    }
+
+    /// [pos_ptr, pos_len, alpha_ptr, alpha_len, idx_ptr, idx_len] for night light spill.
+    pub fn spill_desc(&self) -> Vec<u32> {
+        let s = &self.w.spill;
         vec![ptr(&s.0), s.0.len() as u32, ptr(&s.1), s.1.len() as u32, ptr(&s.2), s.2.len() as u32]
     }
 }

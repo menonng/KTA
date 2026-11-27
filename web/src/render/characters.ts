@@ -105,10 +105,6 @@ export class Crowd {
   readonly group = new THREE.Group();
   private body: THREE.InstancedMesh;
   private head: THREE.InstancedMesh;
-  private m = new THREE.Matrix4();
-  private q = new THREE.Quaternion();
-  private up = new THREE.Vector3(0, 1, 0);
-
   constructor(readonly count: number) {
     const torso = new THREE.CapsuleGeometry(0.2, 0.55, 4, 10).translate(0, 1.15, 0);
     torso.scale(1, 1, 0.65);
@@ -142,13 +138,21 @@ export class Crowd {
   }
 
   update(data: Float32Array) {
+    // Write the yaw rotation + translation straight into the instance
+    // buffers (no per-frame allocation, no quaternion round trip).
+    const bm = this.body.instanceMatrix.array as Float32Array;
+    const hm = this.head.instanceMatrix.array as Float32Array;
     for (let i = 0; i < this.count; i++) {
       const o = i * 4;
       const bob = Math.abs(Math.cos(data[o + 3])) * 0.04;
-      this.q.setFromAxisAngle(this.up, data[o + 2]);
-      this.m.compose(new THREE.Vector3(data[o], bob, data[o + 1]), this.q, new THREE.Vector3(1, 1, 1));
-      this.body.setMatrixAt(i, this.m);
-      this.head.setMatrixAt(i, this.m);
+      const c = Math.cos(data[o + 2]);
+      const sn = Math.sin(data[o + 2]);
+      const k = i * 16;
+      bm[k] = c; bm[k + 1] = 0; bm[k + 2] = -sn; bm[k + 3] = 0;
+      bm[k + 4] = 0; bm[k + 5] = 1; bm[k + 6] = 0; bm[k + 7] = 0;
+      bm[k + 8] = sn; bm[k + 9] = 0; bm[k + 10] = c; bm[k + 11] = 0;
+      bm[k + 12] = data[o]; bm[k + 13] = bob; bm[k + 14] = data[o + 1]; bm[k + 15] = 1;
+      hm.set(bm.subarray(k, k + 16), k);
     }
     this.body.instanceMatrix.needsUpdate = true;
     this.head.instanceMatrix.needsUpdate = true;

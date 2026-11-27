@@ -6,10 +6,11 @@ import fontUrl from 'pretendard/dist/web/static/woff2-subset/Pretendard-Bold.sub
 import { Input } from './platform/input';
 import { Environment } from './render/environment';
 import { buildEntrances, buildWorld } from './render/world';
-import { buildSigns, type LabelDef, type SignInst } from './render/signs';
+import { buildSigns, loadSignTexture, type SignAtlas, type SignInst } from './render/signs';
 import { Crowd, Protagonist } from './render/characters';
 import { Hud } from './hud/hud';
 import { Post } from './render/post';
+import { loadTextures } from './render/textures';
 import { PropStreamer, buildStreetDetails } from './render/props';
 
 const params = new URLSearchParams(location.search);
@@ -21,10 +22,10 @@ const CROWD = Number(params.get('crowd') ?? 90);
 async function boot() {
   const t0 = performance.now();
   const font = new FontFace('Pretendard', `url(${fontUrl})`, { weight: '700' });
-  const [wasm, bin, labelsJson] = await Promise.all([
+  const [wasm, bin, atlas] = await Promise.all([
     init({ module_or_path: wasmUrl }),
     fetch('data/hongdae.bin').then((r) => r.arrayBuffer()),
-    fetch('data/hongdae.labels.json').then((r) => r.json()),
+    fetch('data/hongdae.signs.json').then((r) => r.json() as Promise<SignAtlas>),
     font.load().then((f) => document.fonts.add(f)),
   ]);
   const memory = wasm.memory as WebAssembly.Memory;
@@ -45,26 +46,24 @@ async function boot() {
   const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.3, 1600);
   const env = new Environment(scene, renderer);
 
-  const world = buildWorld(game, memory, scene, env.night);
+  const tex = await loadTextures(renderer);
+  const world = buildWorld(game, memory, scene, env.night, tex, { uTop: env.uniforms.uTop, uHorizon: env.uniforms.uHorizon });
   const entrances = buildEntrances(game, scene);
 
-  // Signs: map data + subway exit signs.
-  const labels: LabelDef[] = labelsJson.labels;
+  // Signs (shop signs, directories, banners, exit signs) from the map data.
+  // The artwork streams in after the first frames (about 15 MB of KTX2).
   const s = game.signs();
   const signs: SignInst[] = [];
   for (let i = 0; i < s.length; i += 8) {
     signs.push({ x: s[i], y: s[i + 1], z: s[i + 2], yaw: s[i + 3], w: s[i + 4], h: s[i + 5], label: s[i + 6], vertical: s[i + 7] > 0.5 });
   }
-  for (const e of entrances) {
-    if (!e.no) continue;
-    const li = labels.push({ t: `${e.no} 출구`, fg: '#FFFFFF', bg: '#00A84D' }) - 1;
-    const fx = Math.sin(e.yaw);
-    const fz = Math.cos(e.yaw);
-    // Above the open (front) end of the canopy, facing outwards.
-    signs.push({ x: e.x - fx * 2.33, y: 3.2, z: e.z - fz * 2.33, yaw: e.yaw + Math.PI, w: 1.9, h: 0.6, label: li, vertical: false });
-  }
-  const signLayer = buildSigns(labels, signs, env.night);
-  scene.add(signLayer.mesh, signLayer.boxes);
+  const signLayer = buildSigns(atlas, signs, env.night);
+  scene.add(signLayer.group);
+  let signTexBytes = 0;
+  const signsReady = loadSignTexture(renderer, atlas.pages).then(({ tex, bytes }) => {
+    signLayer.setTexture(tex);
+    signTexBytes = bytes;
+  });
   const street = buildStreetDetails(game, scene, env.night);
   const props = new PropStreamer(game, memory, scene, env.night);
   const post = new Post(renderer);
@@ -80,7 +79,7 @@ async function boot() {
   const spawnAt = entrances.find((e) => e.no === 9) ?? entrances[0] ?? { x: 0, z: 0, yaw: 0 };
   game.spawn(spawnAt.x + Math.cos(spawnAt.yaw) * 4, spawnAt.z - Math.sin(spawnAt.yaw) * 4);
 
-  const hud = new Hud(document.getElementById('hud')!, labelsJson.attribution);
+  const hud = new Hud(document.getElementById('hud')!, atlas.attribution);
   hud.setMinimap({ buildings: game.minimap_buildings(), roads: game.minimap_roads(), entrances });
 
   const input = new Input(canvas);
@@ -92,6 +91,12 @@ async function boot() {
     props.update(sp[0], sp[2], 0, true);
   }
   input.enabled = !BENCH;
+  // Compile both light setups (fill light on/off) before the first frame so
+  // dusk and dawn never hitch on shader compilation.
+  fill.visible = true;
+  post.compile(scene, camera);
+  fill.visible = false;
+  post.compile(scene, camera);
 
   let hours = Number(params.get('time') ?? 18.6);
   let dayIndex = 2;
@@ -119,6 +124,7 @@ async function boot() {
   let cv = crowdView();
 
   const camTarget = new THREE.Vector3();
+  let camDist = 5.2;
   const frameTimes: number[] = [];
   let benchStart = 0;
   let last = performance.now();
@@ -137,11 +143,48 @@ async function boot() {
     },
     setView: (yaw: number, pitch: number, dist: number) => Object.assign(input, { yaw, pitch, dist }),
     stats: () => collectStats(),
+    debugBuffers: () => {
+      const seen = new Set<unknown>();
+      const rows: [string, number][] = [];
+      scene.traverse((o) => {
+        const g = (o as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+        if (g && !seen.has(g)) {
+          seen.add(g);
+          let b = 0;
+          for (const a of Object.values(g.attributes)) b += ((a as THREE.BufferAttribute).array?.byteLength ?? 0);
+          if (g.index) b += g.index.array?.byteLength ?? 0;
+          const im = (o as THREE.InstancedMesh).instanceMatrix;
+          if (im) b += im.array.byteLength + ((o as THREE.InstancedMesh).instanceColor?.array.byteLength ?? 0);
+          rows.push([`geo ${o.type} ${o.name}`, b]);
+        }
+        const mats = ([] as THREE.Material[]).concat(((o as THREE.Mesh).material as THREE.Material) ?? []);
+        for (const m of mats) {
+          for (const v of Object.values(m)) {
+            const t = v as THREE.Texture;
+            if (t && t.isTexture && !seen.has(t)) {
+              seen.add(t);
+              const mm = (t.mipmaps ?? []) as { data?: ArrayBufferView }[];
+              rows.push([`tex ${t.constructor.name}`, mm.reduce((s2, x) => s2 + (x.data?.byteLength ?? 0), 0) + (((t.image as { data?: ArrayBufferView })?.data?.byteLength) ?? 0)]);
+            }
+          }
+        }
+      });
+      const agg = new Map<string, number>();
+      for (const [k, v] of rows) agg.set(k, (agg.get(k) ?? 0) + v);
+      for (const [k, t] of Object.entries(tex)) {
+        if (!(t as THREE.Texture).isTexture) continue;
+        const mm = ((t as THREE.Texture).mipmaps ?? []) as { data?: ArrayBufferView }[];
+        agg.set(`texset ${k} (${mm.length} mips, v${(t as THREE.Texture).version})`, mm.reduce((s2, x) => s2 + (x.data?.byteLength ?? 0), 0));
+      }
+      return [...agg].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => `${(v / 1048576).toFixed(2)} ${k}`);
+    },
     findSign: (text: string) => {
-      const sg = signs.find((g) => labels[g.label].t === text);
+      const sg = signs.find((g) => atlas.signs[g.label]?.t.includes(text));
       return sg ? { x: sg.x, z: sg.z, yaw: sg.yaw, vertical: sg.vertical } : null;
     },
     bench: null as unknown,
+    signsReady,
+    signList: () => signs.map((g) => ({ x: g.x, z: g.z, yaw: g.yaw, v: g.vertical, st: atlas.signs[g.label]?.st })),
   };
   (window as unknown as { __kta: typeof api }).__kta = api;
 
@@ -158,7 +201,7 @@ async function boot() {
       wasmMB: +(memory.buffer.byteLength / 1048576).toFixed(1),
       jsHeapMB: perfMem ? +(perfMem.usedJSHeapSize / 1048576).toFixed(1) : null,
       meshGpuMB: +(world.gpuBytes / 1048576).toFixed(2),
-      signAtlasMB: +(signLayer.atlasBytes / 1048576).toFixed(2),
+      signAtlasMB: +(signTexBytes / 1048576).toFixed(2),
       buildings: world.buildings,
       chunks: world.chunks,
       signs: signLayer.count,
@@ -169,6 +212,7 @@ async function boot() {
       crosswalks: street.crosswalks,
       lamps: street.lamps,
       postMB: +(post.bytes / 1048576).toFixed(1),
+      texMB: +(tex.bytes / 1048576).toFixed(1),
       crowd: crowd.count,
       pixelRatio: renderer.getPixelRatio(),
     };
@@ -213,15 +257,23 @@ async function boot() {
     env.follow(px, pz);
     fill.position.set(px + Math.sin(input.yaw) * 2.0, 3.2, pz + Math.cos(input.yaw) * 2.0);
     fill.intensity = env.night.value * 5;
+    // A zero-intensity light still costs every lit pixel: drop it in daylight.
+    fill.visible = env.night.value > 0.01;
+    if (world.spill) world.spill.visible = fill.visible;
 
     props.update(px, pz, dt);
     camTarget.set(px, 1.45, pz);
+    // Third-person camera with wall collision: pull in at once when a wall
+    // is in the way, ease back out (no camera inside buildings in alleys).
     const cp = Math.cos(input.pitch);
-    camera.position.set(
-      px + Math.sin(input.yaw) * cp * input.dist,
-      1.6 + Math.sin(input.pitch) * input.dist,
-      pz + Math.cos(input.yaw) * cp * input.dist,
-    );
+    const ox = Math.sin(input.yaw) * cp;
+    const oy = Math.sin(input.pitch);
+    const oz = Math.cos(input.yaw) * cp;
+    const want = input.dist;
+    const clear = game.camera_clear(px, 1.45, pz, px + ox * (want + 0.5), 1.6 + oy * (want + 0.5), pz + oz * (want + 0.5));
+    const allowed = Math.max(0.6, clear * (want + 0.5) - 0.5);
+    camDist = allowed < camDist ? allowed : camDist + (allowed - camDist) * Math.min(1, dt * 2.5);
+    camera.position.set(px + ox * camDist, 1.6 + oy * camDist, pz + oz * camDist);
     camera.lookAt(camTarget);
 
     post.render(scene, camera, env.grade);

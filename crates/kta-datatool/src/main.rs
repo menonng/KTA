@@ -57,11 +57,24 @@ fn inside(p: P2) -> bool {
     p[0].abs() < LIMIT && p[1].abs() < LIMIT
 }
 
+/// One sign-image request per placed sign. The sign generator (tools/signgen)
+/// turns these into finished artwork: fictional shop names, fonts, layout.
 struct Label {
-    text: String,
+    kind: &'static str,
+    cat: String,
+    brand: String,
     fg: &'static str,
     bg: &'static str,
-    brand: bool,
+    w: f32,
+    h: f32,
+    seed: u64,
+    floor: u32,
+    tenants: Vec<&'static str>,
+}
+
+fn push_label(labels: &mut Vec<Label>, l: Label) -> u16 {
+    labels.push(l);
+    (labels.len() - 1) as u16
 }
 
 const GENERIC_PALETTE: [(&str, &str); 8] = [
@@ -166,56 +179,56 @@ fn classify(t: &Tags, id: u64) -> Option<(String, &'static str, &'static str, bo
     let h = hash(id);
     let pick = |v: &[&str]| v[(h % v.len() as u64) as usize].to_string();
     let txt: Option<String> = if has("노래") || amenity == "karaoke_box" {
-        Some(if has("코인") { "코인노래방".into() } else { "노래방".into() })
+        Some(if has("코인") { "coinkaraoke".into() } else { "karaoke".into() })
     } else if has("PC") || has("피시") || amenity == "internet_cafe" {
-        Some("PC방".into())
+        Some("pc".into())
     } else if has("버거") || has("Burger") || has("맥도날드") || has("KFC") || has("맘스터치") || cuisine.contains("burger") {
-        Some("버거".into())
+        Some("burger".into())
     } else if has("파리바게") || has("뚜레쥬르") || shop == "bakery" {
-        Some("베이커리".into())
+        Some("bakery".into())
     } else if has("은행") || amenity == "bank" {
-        Some("은행".into())
+        Some("bank".into())
     } else {
         match (amenity, shop, tourism) {
-            ("cafe", _, _) => Some(pick(&["카페", "카페", "디저트 카페", "COFFEE"])),
+            ("cafe", _, _) => Some(pick(&["cafe", "cafe", "dessert", "cafe"])),
             ("restaurant", _, _) => Some(match cuisine {
-                c if c.contains("korean") => pick(&["한식", "백반", "국밥"]),
-                c if c.contains("chicken") => "치킨".into(),
-                c if c.contains("japanese") || c.contains("sushi") || c.contains("ramen") => pick(&["일식", "라멘", "이자카야"]),
-                c if c.contains("chinese") => "중식".into(),
-                c if c.contains("pizza") => "피자".into(),
-                c if c.contains("barbecue") || c.contains("bbq") => pick(&["고기", "삼겹살"]),
-                c if c.contains("italian") || c.contains("western") => "양식".into(),
-                _ => pick(&["식당", "식당", "맛집", "분식"]),
+                c if c.contains("korean") => pick(&["korean", "baekban", "gukbap"]),
+                c if c.contains("chicken") => "chicken".into(),
+                c if c.contains("japanese") || c.contains("sushi") || c.contains("ramen") => pick(&["japanese", "ramen", "izakaya"]),
+                c if c.contains("chinese") => "chinese".into(),
+                c if c.contains("pizza") => "pizza".into(),
+                c if c.contains("barbecue") || c.contains("bbq") => pick(&["bbq", "bbq"]),
+                c if c.contains("italian") || c.contains("western") => "western".into(),
+                _ => pick(&["restaurant", "restaurant", "restaurant", "snack"]),
             }),
-            ("fast_food", _, _) => Some(pick(&["분식", "김밥", "떡볶이"])),
-            ("bar", _, _) | ("pub", _, _) => Some(pick(&["호프", "포차", "BAR", "주점"])),
-            ("nightclub", _, _) => Some("CLUB".into()),
-            ("pharmacy", _, _) => Some("약국".into()),
-            ("clinic", _, _) | ("doctors", _, _) => Some("의원".into()),
-            ("dentist", _, _) => Some("치과".into()),
-            ("hospital", _, _) => Some("병원".into()),
-            ("place_of_worship", _, _) if t.get("religion") == Some(&"christian") => Some("교회".into()),
-            ("ice_cream", _, _) => Some("아이스크림".into()),
-            (_, "convenience", _) => Some("편의점".into()),
-            (_, "clothes", _) | (_, "boutique", _) | (_, "fashion", _) => Some(pick(&["옷가게", "SALE", "의류"])),
-            (_, "shoes", _) => Some("신발".into()),
-            (_, "cosmetics", _) | (_, "beauty", _) => Some(pick(&["화장품", "네일"])),
-            (_, "hairdresser", _) => Some("미용실".into()),
-            (_, "mobile_phone", _) => Some("휴대폰".into()),
-            (_, "optician", _) => Some("안경".into()),
-            (_, "books", _) => Some("서점".into()),
-            (_, "supermarket", _) => Some("마트".into()),
-            (_, "gift", _) | (_, "variety_store", _) => Some("소품샵".into()),
-            (_, "tattoo", _) => Some("TATTOO".into()),
-            (_, "massage", _) => Some("마사지".into()),
-            (_, "laundry", _) | (_, "dry_cleaning", _) => Some("세탁".into()),
-            (_, "stationery", _) => Some("문구".into()),
-            (_, "musical_instrument", _) | (_, "music", _) => Some("악기".into()),
-            (_, "alcohol", _) => Some("주류".into()),
-            (_, "photo", _) => Some("사진관".into()),
-            (_, _, "hostel") | (_, _, "guest_house") => Some("게스트하우스".into()),
-            (_, _, "hotel") => Some("호텔".into()),
+            ("fast_food", _, _) => Some(pick(&["snack", "snack", "tteokbokki"])),
+            ("bar", _, _) | ("pub", _, _) => Some(pick(&["hof", "pocha", "bar", "pocha"])),
+            ("nightclub", _, _) => Some("club".into()),
+            ("pharmacy", _, _) => Some("pharmacy".into()),
+            ("clinic", _, _) | ("doctors", _, _) => Some("clinic".into()),
+            ("dentist", _, _) => Some("dentist".into()),
+            ("hospital", _, _) => Some("clinic".into()),
+            ("place_of_worship", _, _) if t.get("religion") == Some(&"christian") => Some("church".into()),
+            ("ice_cream", _, _) => Some("icecream".into()),
+            (_, "convenience", _) => Some("mart".into()),
+            (_, "clothes", _) | (_, "boutique", _) | (_, "fashion", _) => Some(pick(&["clothes", "vintage", "clothes"])),
+            (_, "shoes", _) => Some("shoes".into()),
+            (_, "cosmetics", _) | (_, "beauty", _) => Some(pick(&["cosmetics", "nail"])),
+            (_, "hairdresser", _) => Some("hair".into()),
+            (_, "mobile_phone", _) => Some("phone".into()),
+            (_, "optician", _) => Some("optician".into()),
+            (_, "books", _) => Some("books".into()),
+            (_, "supermarket", _) => Some("mart".into()),
+            (_, "gift", _) | (_, "variety_store", _) => Some("gift".into()),
+            (_, "tattoo", _) => Some("tattoo".into()),
+            (_, "massage", _) => Some("massage".into()),
+            (_, "laundry", _) | (_, "dry_cleaning", _) => Some("laundry".into()),
+            (_, "stationery", _) => Some("stationery".into()),
+            (_, "musical_instrument", _) | (_, "music", _) => Some("music".into()),
+            (_, "alcohol", _) => Some("liquor".into()),
+            (_, "photo", _) => Some("photo".into()),
+            (_, _, "hostel") | (_, _, "guest_house") => Some("guesthouse".into()),
+            (_, _, "hotel") => Some("hotel".into()),
             _ => None,
         }
     };
@@ -344,6 +357,7 @@ fn main() {
             levels: (height / 3.3).round().clamp(1.0, 255.0) as u8,
             kind: k,
             seed: (h >> 16) as u16,
+            ..Default::default()
         })
     };
 
@@ -469,19 +483,62 @@ fn main() {
         }
     }
 
+    let road_dist = |p: P2| -> (f32, u8) {
+        let mut best = (f32::MAX, 0u8);
+        for r in &roads {
+            for sgm in r.pts.windows(2) {
+                let (c, _) = closest_on_segment(p, sgm[0], sgm[1]);
+                let d = kta_core::geom::dist2(p, c).sqrt() - r.width * 0.5;
+                if d < best.0 {
+                    best = (d, r.kind & !data::ONEWAY);
+                }
+            }
+        }
+        best
+    };
+    // Street-facing walls (a point 5 m out from the wall middle lies on a
+    // road) and shop fronts (commercial / generic buildings, some houses).
+    for (bi, b) in buildings.iter_mut().enumerate() {
+        let n = b.pts.len();
+        b.street = (0..n)
+            .map(|ei| {
+                let (a, c) = (b.pts[ei], b.pts[(ei + 1) % n]);
+                let d = [c[0] - a[0], c[1] - a[1]];
+                let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+                if len < 2.0 {
+                    return false;
+                }
+                // Probe 4 m and 9 m out (wide pavements and plazas count too).
+                [4.0f32, 9.0].iter().any(|&o| {
+                    let m = [a[0] + d[0] * 0.5 + d[1] / len * o, a[1] + d[1] * 0.5 - d[0] / len * o];
+                    road_dist(m).0 < 3.0
+                })
+            })
+            .collect();
+        let any = b.street.iter().any(|&f| f);
+        let roll = hash(bi as u64 ^ 0x5409) % 100;
+        b.shop = any
+            && match b.kind {
+                kind::COMMERCIAL | kind::OTHER => roll < 92,
+                kind::RESIDENTIAL => roll < 35,
+                _ => false,
+            };
+    }
+    let faces_road = |bi: usize, ei: usize| -> bool { buildings[bi].street.get(ei).copied().unwrap_or(false) };
     // Signs: map POIs to labels and place them on the nearest building wall.
     let mut labels: Vec<Label> = Vec::new();
-    let mut label_ix: HashMap<(String, &str, &str), u16> = HashMap::new();
     let mut occupancy: HashMap<(usize, usize), Vec<(f32, f32, u32)>> = HashMap::new();
     let mut signs: Vec<Sign> = Vec::new();
     let (mut brand_count, mut generic_count, mut skipped) = (0, 0, 0);
+    let mut poi_fronts: Vec<(usize, usize)> = Vec::new();
     for (id, lat, lon, t) in &poi_nodes {
         let Some((txt, fg, bg, is_brand)) = classify(t, *id as u64) else { continue };
         let p = pr.p(*lat, *lon);
         if !inside(p) {
             continue;
         }
-        // Nearest wall within 30 m.
+        // Nearest street-facing wall within 30 m (side and back walls only
+        // win when no street-facing wall is close).
         let mut best: Option<(f32, usize, usize, f32)> = None;
         for (bi, b) in buildings.iter().enumerate() {
             let c = b.pts[0];
@@ -492,8 +549,12 @@ fn main() {
             for ei in 0..n {
                 let (cp, tt) = closest_on_segment(p, b.pts[ei], b.pts[(ei + 1) % n]);
                 let d2 = kta_core::geom::dist2(p, cp);
-                if d2 < 900.0 && best.map_or(true, |bb| d2 < bb.0) {
-                    best = Some((d2, bi, ei, tt));
+                if d2 >= 900.0 {
+                    continue;
+                }
+                let score = d2 + if faces_road(bi, ei) { 0.0 } else { 350.0 };
+                if best.map_or(true, |bb| score < bb.0) {
+                    best = Some((score, bi, ei, tt));
                 }
             }
         }
@@ -512,12 +573,10 @@ fn main() {
         }
         let dir = [d[0] / len, d[1] / len];
         let nrm = [dir[1], -dir[0]];
-        let key = (txt.clone(), fg, bg);
-        let li = *label_ix.entry(key).or_insert_with(|| {
-            labels.push(Label { text: txt.clone(), fg, bg, brand: is_brand });
-            (labels.len() - 1) as u16
-        });
-        let units = char_units(&txt);
+        // Generic shops get a fictional name later (about 4-6 characters).
+        let units = if is_brand { char_units(&txt) } else { 3.0 + (hash(*id as u64 ^ 0x77) % 4) as f32 };
+        let (cat, brand) = if is_brand { ("brand".to_string(), txt.clone()) } else { (txt.clone(), String::new()) };
+        let seed = hash(*id as u64 ^ 0xa5a5);
         let hsh = hash(*id as u64 ^ 0x51ed);
         let vertical = !is_brand && b.height >= 9.0 && hsh % 3 == 0 && units <= 6.0;
         let start_floor = t.get("level").and_then(|v| parse_num(v)).unwrap_or(0.0).max(0.0) as u32;
@@ -534,6 +593,7 @@ fn main() {
                 continue;
             }
             occ.push((s, s, 99));
+            let li = push_label(&mut labels, Label { kind: "vert", cat: cat.clone(), brand: brand.clone(), fg, bg, w: 0.72, h, seed, floor: 0, tenants: vec![] });
             signs.push(Sign {
                 x: a[0] + dir[0] * s + nrm[0] * 0.55,
                 z: a[1] + dir[1] * s + nrm[1] * 0.55,
@@ -567,13 +627,18 @@ fn main() {
                 let s1 = s + w * 0.5;
                 if !occ.iter().any(|&(o0, o1, f)| f == floor && s0 < o1 + 0.2 && s1 > o0 - 0.2) {
                     occ.push((s0, s1, floor));
+                    if floor == 0 {
+                        poi_fronts.push((bi, ei));
+                    }
+                    let hh = if floor == 0 { hgt } else { 0.95 };
+                    let li = push_label(&mut labels, Label { kind: if floor == 0 { "fascia" } else { "upper" }, cat: cat.clone(), brand: brand.clone(), fg, bg, w, h: hh, seed, floor, tenants: vec![] });
                     signs.push(Sign {
                         x: a[0] + dir[0] * s + nrm[0] * 0.25,
                         z: a[1] + dir[1] * s + nrm[1] * 0.25,
                         y,
                         yaw: nrm[0].atan2(nrm[1]),
                         w,
-                        h: if floor == 0 { hgt } else { 0.95 },
+                        h: hh,
                         label: li,
                         vertical: false,
                     });
@@ -595,74 +660,155 @@ fn main() {
     }
 
 
+    // A wall carrying a real shop's sign is a shop front, whatever the probe said.
+    for &(bi, ei) in &poi_fronts {
+        buildings[bi].shop = true;
+        if let Some(f) = buildings[bi].street.get_mut(ei) {
+            *f = true;
+        }
+    }
     // ---- Streetscape density pass (generic names only; brands via billboards) ----
-    let upper: [&str; 18] = ["노래연습장", "PC방", "호프", "당구장", "BAR", "헤어", "네일", "필라테스", "영어학원", "치과", "부동산", "오락실", "룸카페", "보드게임", "스튜디오", "만화카페", "코인노래방", "방탈출"];
-    let vert: [&str; 10] = ["노래방", "PC방", "호프", "당구장", "BAR", "CLUB", "룸카페", "오락실", "포차", "맛집"];
+    // Category mixes (weights) typical of Hongdae streets.
+    const GROUND: &[(&str, u32)] = &[
+        ("cafe", 14), ("restaurant", 12), ("clothes", 10), ("hair", 7), ("bar", 6), ("pocha", 5), ("cosmetics", 5), ("snack", 5),
+        ("hof", 4), ("vintage", 4), ("bbq", 4), ("dessert", 4), ("gift", 4), ("photo", 3), ("nail", 3), ("chicken", 3), ("korean", 3),
+        ("japanese", 3), ("coinkaraoke", 3), ("realestate", 3), ("ramen", 2), ("chinese", 2), ("bakery", 2), ("karaoke", 2), ("shoes", 2),
+        ("phone", 2), ("mart", 2), ("studio", 2), ("arcade", 2), ("izakaya", 2), ("western", 2), ("burger", 2), ("tteokbokki", 2),
+        ("pc", 1), ("pharmacy", 1), ("laundry", 1), ("tattoo", 1), ("escape", 1), ("boardgame", 1), ("icecream", 1), ("liquor", 1),
+        ("optician", 1), ("books", 1), ("pizza", 1), ("massage", 1),
+    ];
+    const UPPER: &[(&str, u32)] = &[
+        ("academy", 8), ("music_academy", 6), ("clinic", 6), ("karaoke", 6), ("pc", 6), ("pilates", 5), ("billiards", 5), ("studio", 5),
+        ("dentist", 4), ("hof", 4), ("bar", 4), ("roomcafe", 4), ("escape", 4), ("hair", 4), ("cafe", 4), ("realestate", 3), ("coinkaraoke", 3),
+        ("manga", 3), ("boardgame", 3), ("nail", 3), ("pocha", 3), ("arcade", 2), ("massage", 2), ("restaurant", 2),
+    ];
+    const VERT: &[(&str, u32)] = &[
+        ("karaoke", 6), ("pc", 5), ("hof", 5), ("billiards", 4), ("bar", 4), ("club", 2), ("roomcafe", 3), ("arcade", 3), ("pocha", 4),
+        ("restaurant", 4), ("cafe", 3), ("hair", 3), ("clinic", 2), ("dentist", 2), ("academy", 2), ("coinkaraoke", 3),
+    ];
+    fn wpick(list: &[(&'static str, u32)], r: f32) -> &'static str {
+        let total: u32 = list.iter().map(|x| x.1).sum();
+        let mut v = (r * total as f32) as u32;
+        for &(k, w) in list {
+            if v < w {
+                return k;
+            }
+            v -= w;
+        }
+        list[0].0
+    }
+    /// Shared artwork pools for density signs: a design is reused only where
+    /// its other copies are far away (out of sight), which keeps the sign
+    /// atlas bounded while every shop front still gets a sign.
+    struct Pool {
+        ix: Vec<u16>,
+        uses: Vec<Vec<P2>>,
+        h: u64,
+    }
+    impl Pool {
+        fn pick(&mut self, p: P2) -> usize {
+            let mut best = (0usize, -1.0f32);
+            for _ in 0..28 {
+                self.h = hash(self.h);
+                let k = (self.h % self.ix.len() as u64) as usize;
+                let dmin = self.uses[k].iter().map(|q| kta_core::geom::dist2(p, *q)).fold(f32::MAX, f32::min);
+                if dmin > 280.0 * 280.0 {
+                    best = (k, dmin);
+                    break;
+                }
+                if dmin > best.1 {
+                    best = (k, dmin);
+                }
+            }
+            self.uses[best.0].push(p);
+            best.0
+        }
+    }
+    let make_pool = |labels: &mut Vec<Label>, kind: &'static str, n: usize, list: &[(&'static str, u32)], w: f32, hs: &[f32], salt: u64| -> Pool {
+        let mut ix = Vec::new();
+        let mut h = salt;
+        for k in 0..n {
+            h = hash(h);
+            let cat = wpick(list, (h % 10_000) as f32 / 10_000.0);
+            let hh = hs[k % hs.len()];
+            ix.push(push_label(labels, Label { kind, cat: cat.into(), brand: String::new(), fg: "", bg: "", w, h: hh, seed: hash(h ^ 0xfeed) % 4_294_967_296, floor: 1, tenants: vec![] }));
+        }
+        Pool { uses: vec![Vec::new(); ix.len()], ix, h: salt ^ 0x1234 }
+    };
+    let mut pool_f = make_pool(&mut labels, "fascia", 560, GROUND, 6.5, &[1.15], 0xf1);
+    let mut pool_u = make_pool(&mut labels, "upper", 340, UPPER, 6.0, &[0.95], 0xf2);
+    let mut pool_v = make_pool(&mut labels, "vert", 200, VERT, 0.72, &[2.6, 3.2, 3.8, 4.4], 0xf3);
     let ads: [(&str, &str, &str); 12] = [
         ("기가커피", "#3A2416", "#FFD400"), ("라떼", "#FFFFFF", "#DA291C"), ("심송", "#FFFFFF", "#1428A0"),
         ("CUZ", "#FFFFFF", "#652F8D"), ("스타덕스", "#FFFFFF", "#00704A"), ("농담식품 매운라면", "#FFFFFF", "#C8102E"),
         ("참아슬", "#FFFFFF", "#0B6E4F"), ("다음처럼", "#FFFFFF", "#1D4E9E"), ("올리브올드", "#FFFFFF", "#8DC63F"),
         ("꾸팡", "#FFFFFF", "#E8501E"), ("배달의겨레", "#FFFFFF", "#2AC1BC"), ("코코아T", "#1A1A1A", "#FFE000"),
     ];
-    let window_style: [(&str, &str); 3] = [("#1A2026", "#FFD400"), ("#1A2026", "#FFFFFF"), ("#10161C", "#FF6FA8")];
-    fn lab(labels: &mut Vec<Label>, ix: &mut HashMap<(String, &'static str, &'static str), u16>, t: &str, fg: &'static str, bg: &'static str, brand: bool) -> u16 {
-        *ix.entry((t.to_string(), fg, bg)).or_insert_with(|| {
-            labels.push(Label { text: t.to_string(), fg, bg, brand });
-            (labels.len() - 1) as u16
-        })
-    }
-    let road_dist = |p: P2| -> (f32, u8) {
-        let mut best = (f32::MAX, 0u8);
-        for r in &roads {
-            for sgm in r.pts.windows(2) {
-                let (c, _) = closest_on_segment(p, sgm[0], sgm[1]);
-                let d = kta_core::geom::dist2(p, c).sqrt() - r.width * 0.5;
-                if d < best.0 {
-                    best = (d, r.kind & !data::ONEWAY);
-                }
-            }
-        }
-        best
-    };
-    let mut signed_edges: Vec<(usize, usize)> = occupancy.keys().copied().collect();
-    signed_edges.sort();
     let mut extra_n = 0usize;
-    let mut done_bld: HashMap<usize, ()> = HashMap::new();
-    for &(bi, ei) in &signed_edges {
-        if done_bld.contains_key(&bi) {
-            continue;
-        }
-        done_bld.insert(bi, ());
+    let mut ground_n = 0usize;
+    for bi in 0..buildings.len() {
         let b = &buildings[bi];
-        let lv = b.levels as u32;
-        if lv < 3 {
+        if !b.shop {
             continue;
         }
         let n = b.pts.len();
-        let (a, c) = (b.pts[ei], b.pts[(ei + 1) % n]);
-        let d = [c[0] - a[0], c[1] - a[1]];
-        let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
-        if len < 3.0 {
-            continue;
-        }
-        let dir = [d[0] / len, d[1] / len];
-        let nrm = [dir[1], -dir[0]];
+        let lv = b.levels as u32;
         let mut h = hash(bi as u64 * 31 + 7);
         let mut rnd = || {
             h = hash(h);
             (h % 10_000) as f32 / 10_000.0
         };
-        // Upper-floor horizontal signs (some styled as window lettering).
-        let k = 1 + (rnd() * (lv.min(4) - 1) as f32) as u32;
+        // Longest street-facing edge carries the upper-floor signage.
+        let mut main_edge: Option<(usize, f32)> = None;
+        for ei in 0..n {
+            if !b.street[ei] {
+                continue;
+            }
+            let (a, c) = (b.pts[ei], b.pts[(ei + 1) % n]);
+            let d = [c[0] - a[0], c[1] - a[1]];
+            let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+            if main_edge.map_or(true, |m| len > m.1) {
+                main_edge = Some((ei, len));
+            }
+            if len < 3.2 {
+                continue;
+            }
+            let dir = [d[0] / len, d[1] / len];
+            let nrm = [dir[1], -dir[0]];
+            // Ground floor: one fascia per shop bay (4-8 m), unless a POI sign is there.
+            let bays = ((len / 6.0).round() as usize).max(1);
+            let bw = len / bays as f32;
+            for k in 0..bays {
+                let s = bw * (k as f32 + 0.5);
+                let w = (bw - 0.45).clamp(2.2, 9.0).min(len - 0.3);
+                let occ = occupancy.entry((bi, ei)).or_default();
+                if occ.iter().any(|&(o0, o1, f)| f == 0 && s - w * 0.5 < o1 + 0.2 && s + w * 0.5 > o0 - 0.2) {
+                    continue;
+                }
+                if rnd() < 0.06 {
+                    continue; // empty unit
+                }
+                occ.push((s - w * 0.5, s + w * 0.5, 0));
+                let p = [a[0] + dir[0] * s + nrm[0] * 0.25, a[1] + dir[1] * s + nrm[1] * 0.25];
+                let k = pool_f.pick(p);
+                let li = pool_f.ix[k];
+                signs.push(Sign { x: p[0], z: p[1], y: 3.55, yaw: nrm[0].atan2(nrm[1]), w, h: 1.15, label: li, vertical: false });
+                ground_n += 1;
+            }
+        }
+        let Some((ei, len)) = main_edge else { continue };
+        if lv < 3 || len < 3.0 {
+            continue;
+        }
+        let (a, c) = (b.pts[ei], b.pts[(ei + 1) % n]);
+        let d = [c[0] - a[0], c[1] - a[1]];
+        let dir = [d[0] / len, d[1] / len];
+        let nrm = [dir[1], -dir[0]];
+        // Upper-floor horizontal signs and window lettering.
+        let k = 1 + (rnd() * (lv.min(5) - 1) as f32) as u32;
         for _ in 0..k {
             let floor = 1 + (rnd() * (lv - 1) as f32) as u32;
-            let txt = upper[(rnd() * upper.len() as f32) as usize % upper.len()];
-            let (bg, fg) = if rnd() < 0.45 {
-                window_style[(rnd() * 3.0) as usize % 3]
-            } else {
-                GENERIC_PALETTE[(rnd() * GENERIC_PALETTE.len() as f32) as usize % GENERIC_PALETTE.len()]
-            };
-            let w = (char_units(txt) * 0.7 + 1.2).max(len * 0.5).min(len - 0.4).min(9.0);
+            let w = (4.4f32).max(len * (0.45 + rnd() * 0.3)).min(len - 0.4).min(9.0);
             if w < 1.5 {
                 continue;
             }
@@ -676,28 +822,62 @@ fn main() {
                 continue;
             }
             occ.push((s - w * 0.5, s + w * 0.5, floor));
-            let li = lab(&mut labels, &mut label_ix, txt, fg, bg, false);
-            signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.25, z: a[1] + dir[1] * s + nrm[1] * 0.25, y, yaw: nrm[0].atan2(nrm[1]), w, h: 0.95, label: li, vertical: false });
+            let p = [a[0] + dir[0] * s + nrm[0] * 0.25, a[1] + dir[1] * s + nrm[1] * 0.25];
+            let k = pool_u.pick(p);
+            let li = pool_u.ix[k];
+            signs.push(Sign { x: p[0], z: p[1], y, yaw: nrm[0].atan2(nrm[1]), w, h: 0.95, label: li, vertical: false });
             extra_n += 1;
         }
-        // Vertical LED sign stack at an edge end.
-        if lv >= 4 && rnd() < 0.55 {
+        // Projecting signs at an edge end: a tenant directory column (one panel
+        // per floor, very common on Korean mixed-use buildings) or single signs.
+        if rnd() < 0.62 {
             let s = if rnd() < 0.5 { 0.7 } else { len - 0.7 };
-            let mut y0 = 3.9;
-            for _ in 0..(1 + (rnd() < 0.5) as u32) {
-                let txt = vert[(rnd() * vert.len() as f32) as usize % vert.len()];
-                let hh = (char_units(txt) * 0.62 + 0.6).min(5.0);
-                if y0 + hh > b.height - 0.3 {
-                    break;
+            if rnd() < 0.5 && lv >= 4 {
+                let floors = (lv - 1).min(5);
+                let mut tenants = Vec::new();
+                for _ in 0..floors {
+                    tenants.push(wpick(UPPER, rnd()));
                 }
-                let (bg, fg) = GENERIC_PALETTE[(rnd() * GENERIC_PALETTE.len() as f32) as usize % GENERIC_PALETTE.len()];
-                let li = lab(&mut labels, &mut label_ix, txt, fg, bg, false);
-                signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.6, z: a[1] + dir[1] * s + nrm[1] * 0.6, y: y0 + hh * 0.5, yaw: dir[0].atan2(dir[1]), w: 0.72, h: hh, label: li, vertical: true });
-                y0 += hh + 0.25;
+                let y0 = 3.75;
+                let hh = (floors as f32 * 3.3 - 0.5).min(b.height - y0 - 0.4);
+                if hh > 2.5 {
+                    let li = push_label(&mut labels, Label { kind: "stack", cat: "stack".into(), brand: String::new(), fg: "", bg: "", w: 1.05, h: hh, seed: (rnd() * 4.0e9) as u64, floor: 1, tenants });
+                    signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.75, z: a[1] + dir[1] * s + nrm[1] * 0.75, y: y0 + hh * 0.5, yaw: dir[0].atan2(dir[1]), w: 1.05, h: hh, label: li, vertical: true });
+                    extra_n += 1;
+                }
+            } else {
+                let mut y0 = 3.9;
+                for _ in 0..(1 + (rnd() < 0.4) as u32) {
+                    let p = [a[0] + dir[0] * s + nrm[0] * 0.6, a[1] + dir[1] * s + nrm[1] * 0.6];
+                    let k = pool_v.pick(p);
+                    let li = pool_v.ix[k];
+                    let hh = labels[li as usize].h;
+                    if y0 + hh > b.height - 0.3 {
+                        pool_v.uses[k].pop();
+                        break;
+                    }
+                    signs.push(Sign { x: p[0], z: p[1], y: y0 + hh * 0.5, yaw: dir[0].atan2(dir[1]), w: 0.72, h: hh, label: li, vertical: true });
+                    y0 += hh + 0.25;
+                    extra_n += 1;
+                }
+            }
+        }
+        // Vacancy banners (임대) on some upper floors.
+        if rnd() < 0.08 {
+            let floor = 1 + (rnd() * (lv - 1) as f32) as u32;
+            let w = (len * 0.6).clamp(3.0, 6.0).min(len - 0.4);
+            let y = floor as f32 * 3.3 + 1.4;
+            let s = len * (0.3 + rnd() * 0.4);
+            let occ = occupancy.entry((bi, ei)).or_default();
+            if w > 2.0 && y + 0.6 < b.height && !occ.iter().any(|&(o0, o1, f)| f == floor && s - w * 0.5 < o1 + 0.2 && s + w * 0.5 > o0 - 0.2) {
+                occ.push((s - w * 0.5, s + w * 0.5, floor));
+                let li = push_label(&mut labels, Label { kind: "banner", cat: "rent".into(), brand: String::new(), fg: "", bg: "", w, h: 0.9, seed: (rnd() * 4.0e9) as u64, floor, tenants: vec![] });
+                signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.12, z: a[1] + dir[1] * s + nrm[1] * 0.12, y, yaw: nrm[0].atan2(nrm[1]), w, h: 0.9, label: li, vertical: false });
                 extra_n += 1;
             }
         }
     }
+    eprintln!("density pass: ground fascia +{}, upper/projecting/banners +{}", ground_n, extra_n);
     // Rooftop billboards on taller buildings along major roads.
     let mut cand: Vec<(f32, usize, usize)> = Vec::new();
     for (bi, b) in buildings.iter().enumerate() {
@@ -735,9 +915,9 @@ fn main() {
         let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
         let nrm = [d[1] / len, -d[0] / len];
         let (txt, fg, bg) = ads[boards % ads.len()];
-        let li = lab(&mut labels, &mut label_ix, txt, fg, bg, true);
         let w = (len * 0.8).min(13.0);
         let hh = 3.2;
+        let li = push_label(&mut labels, Label { kind: "board", cat: "brand".into(), brand: txt.to_string(), fg, bg, w, h: hh, seed: hash(bi as u64 ^ 0xb0), floor: 0, tenants: vec![] });
         signs.push(Sign {
             x: a[0] + d[0] * 0.5 - nrm[0] * 0.4,
             z: a[1] + d[1] * 0.5 - nrm[1] * 0.4,
@@ -750,7 +930,16 @@ fn main() {
         });
         boards += 1;
     }
-    eprintln!("density pass: +{} signs, {} rooftop billboards", extra_n, boards);
+    eprintln!("rooftop billboards {}", boards);
+    // Subway exit number signs above the open end of each entrance canopy.
+    for e in &entrances {
+        if e.exit_no == 0 {
+            continue;
+        }
+        let (fx, fz) = (e.yaw.sin(), e.yaw.cos());
+        let li = push_label(&mut labels, Label { kind: "exit", cat: "exit".into(), brand: e.exit_no.to_string(), fg: "", bg: "", w: 1.9, h: 0.6, seed: e.exit_no as u64, floor: 0, tenants: vec![] });
+        signs.push(Sign { x: e.x - fx * 2.33, y: 3.2, z: e.z - fz * 2.33, yaw: e.yaw + std::f32::consts::PI, w: 1.9, h: 0.6, label: li, vertical: false });
+    }
 
     let map = MapData { origin_lat: lat0, origin_lon: lon0, buildings, roads, entrances, signs };
     let bin = data::write(&map);
@@ -758,16 +947,24 @@ fn main() {
     std::fs::create_dir_all(out_dir).unwrap();
     std::fs::write(out_dir.join(format!("{}.bin", args[3])), &bin).unwrap();
 
-    let mut js = String::from("{\"attribution\":\"© OpenStreetMap contributors (ODbL)\",\"labels\":[");
+    let req_dir = std::path::Path::new(args.get(4).map(String::as_str).unwrap_or("data-src/gen"));
+    std::fs::create_dir_all(req_dir).unwrap();
+    let esc = |t: &str| t.replace('\\', "\\\\").replace('"', "\\\"");
+    let mut js = String::from("{\"attribution\":\"© OpenStreetMap contributors (ODbL)\",\"signs\":[");
     for (i, l) in labels.iter().enumerate() {
         if i > 0 {
-            js.push(',');
+            js.push_str(",\n");
         }
-        let esc = l.text.replace('\\', "\\\\").replace('"', "\\\"");
-        let _ = write!(js, "{{\"t\":\"{}\",\"fg\":\"{}\",\"bg\":\"{}\",\"b\":{}}}", esc, l.fg, l.bg, l.brand as u8);
+        let ten: Vec<String> = l.tenants.iter().map(|t| format!("\"{}\"", t)).collect();
+        let _ = write!(
+            js,
+            "{{\"k\":\"{}\",\"c\":\"{}\",\"t\":\"{}\",\"fg\":\"{}\",\"bg\":\"{}\",\"w\":{:.2},\"h\":{:.2},\"s\":{},\"f\":{},\"ten\":[{}]}}",
+            l.kind, l.cat, esc(&l.brand), l.fg, l.bg, l.w, l.h, l.seed % 4_294_967_296, l.floor, ten.join(",")
+        );
     }
     js.push_str("]}");
-    std::fs::write(out_dir.join(format!("{}.labels.json", args[3])), js).unwrap();
+    std::fs::write(req_dir.join(format!("{}.signreq.json", args[3])), js).unwrap();
+    let _ = std::fs::remove_file(out_dir.join(format!("{}.labels.json", args[3])));
 
     eprintln!(
         "origin {:.6},{:.6} | buildings {} roads {} entrances {} signs {} (brand {}, generic {}, skipped {}) labels {} | {} bytes",

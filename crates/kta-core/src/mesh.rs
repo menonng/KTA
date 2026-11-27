@@ -90,6 +90,8 @@ pub fn build_chunks(m: &MapData, cell: f32) -> Vec<MeshBuf> {
         let mb = list.last_mut().unwrap();
         mb.buildings += 1;
         let kf_wall = kindflags(b.kind, false, h);
+        // Bit 3 of kind marks a street-facing shop-front wall (glass + signage).
+        let kf_shop = kindflags((b.kind & 7) | 8, false, h);
         let kf_roof = kindflags(b.kind, true, h);
         let seed = b.seed;
 
@@ -109,10 +111,11 @@ pub fn build_chunks(m: &MapData, cell: f32) -> Vec<MeshBuf> {
             let u0 = cm(u);
             let u1 = cm(u + len);
             let hv = cm(h);
-            let b0 = mb.push([a[0], 0.0, a[1]], nn, [u0, 0, seed, kf_wall]);
-            let t0 = mb.push([a[0], h, a[1]], nn, [u0, hv, seed, kf_wall]);
-            let t1 = mb.push([bb[0], h, bb[1]], nn, [u1, hv, seed, kf_wall]);
-            let b1 = mb.push([bb[0], 0.0, bb[1]], nn, [u1, 0, seed, kf_wall]);
+            let kf = if b.shop && b.street.get(i).copied().unwrap_or(false) { kf_shop } else { kf_wall };
+            let b0 = mb.push([a[0], 0.0, a[1]], nn, [u0, 0, seed, kf]);
+            let t0 = mb.push([a[0], h, a[1]], nn, [u0, hv, seed, kf]);
+            let t1 = mb.push([bb[0], h, bb[1]], nn, [u1, hv, seed, kf]);
+            let b1 = mb.push([bb[0], 0.0, bb[1]], nn, [u1, 0, seed, kf]);
             mb.idx.extend_from_slice(&[b0, t0, t1, b0, t1, b1]);
             // Roof parapet (난간벽): outer face continues the wall, inner face looks onto the roof.
             if h > 5.0 {
@@ -280,7 +283,7 @@ mod tests {
         let mut pts = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
         crate::geom::clean_polygon(&mut pts, 0.1);
         let m = MapData {
-            buildings: vec![Building { pts, height: 9.0, levels: 3, kind: 2, seed: 1 }],
+            buildings: vec![Building { pts, height: 9.0, levels: 3, kind: 2, seed: 1, ..Default::default() }],
             ..Default::default()
         };
         let ch = build_chunks(&m, 100.0);

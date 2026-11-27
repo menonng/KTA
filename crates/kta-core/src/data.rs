@@ -1,11 +1,11 @@
-//! Compact binary map tile format ("KTA1").
+//! Compact binary map tile format ("KTA1", version 2).
 //!
 //! All coordinates are local meters around the tile origin, quantized to
 //! 5 cm in i16 (range about ±1.6 km). x = east, z = south (north is -z).
-//! A building costs 8 + 4·n bytes, so a whole district fits in ~100 KB.
+//! A building costs 8 + ceil(n/8) + 4·n bytes, so a district fits in ~130 KB.
 
 pub const MAGIC: &[u8; 4] = b"KTA1";
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 pub const Q: f32 = 0.05;
 /// Road kind flag: one-way carriageway (travel along point order).
 pub const ONEWAY: u8 = 0x80;
@@ -17,6 +17,10 @@ pub struct Building {
     pub levels: u8,
     pub kind: u8,
     pub seed: u16,
+    /// Ground floor is a shop front (glass, signage) on street-facing walls.
+    pub shop: bool,
+    /// Per edge (pts[i] -> pts[i+1]): the wall faces a street.
+    pub street: Vec<bool>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -152,13 +156,15 @@ pub fn parse(bytes: &[u8]) -> Result<MapData, ParseError> {
         let n = r.u16()? as usize;
         let height = r.u16()? as f32 * 0.1;
         let levels = r.u8()?;
-        let kind = r.u8()?;
+        let kraw = r.u8()?;
         let seed = r.u16()?;
+        let mask = r.take(n.div_ceil(8))?;
+        let street = (0..n).map(|i| mask[i / 8] & (1 << (i % 8)) != 0).collect();
         let mut pts = Vec::with_capacity(n);
         for _ in 0..n {
             pts.push(r.pt()?);
         }
-        buildings.push(Building { pts, height, levels, kind, seed });
+        buildings.push(Building { pts, height, levels, kind: kraw & 0x3F, seed, shop: kraw & 0x40 != 0, street });
     }
     let mut roads = Vec::with_capacity(nr);
     for _ in 0..nr {
@@ -216,8 +222,15 @@ pub fn write(m: &MapData) -> Vec<u8> {
         o.extend_from_slice(&(b.pts.len() as u16).to_le_bytes());
         o.extend_from_slice(&((b.height * 10.0).round() as u16).to_le_bytes());
         o.push(b.levels);
-        o.push(b.kind);
+        o.push((b.kind & 0x3F) | if b.shop { 0x40 } else { 0 });
         o.extend_from_slice(&b.seed.to_le_bytes());
+        let mut mask = vec![0u8; b.pts.len().div_ceil(8)];
+        for (i, &f) in b.street.iter().enumerate().take(b.pts.len()) {
+            if f {
+                mask[i / 8] |= 1 << (i % 8);
+            }
+        }
+        o.extend_from_slice(&mask);
         for p in &b.pts {
             pt(&mut o, p);
         }
@@ -264,6 +277,8 @@ mod tests {
                 levels: 4,
                 kind: 2,
                 seed: 77,
+                shop: true,
+                street: vec![true, false, true],
             }],
             roads: vec![Road { pts: vec![[0.0, 0.0], [5.0, 5.0]], kind: 1, width: 20.0 }],
             entrances: vec![Entrance { x: 1.0, z: 2.0, yaw: 1.0, exit_no: 9 }],
@@ -273,6 +288,8 @@ mod tests {
         let p = parse(&b).unwrap();
         assert_eq!(p.buildings[0].pts.len(), 3);
         assert!((p.buildings[0].height - 12.3).abs() < 0.05);
+        assert!(p.buildings[0].shop && p.buildings[0].kind == 2);
+        assert_eq!(p.buildings[0].street, vec![true, false, true]);
         assert_eq!(p.entrances[0].exit_no, 9);
         assert!(p.signs[0].vertical);
         assert!((p.roads[0].width - 20.0).abs() < 0.01);

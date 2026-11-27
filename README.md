@@ -9,14 +9,16 @@ SNS에서 유행한 "Life in Korea" GTA풍 이미지(한국 일상을 보내는 
 
 ## 현재 상태 (Phase 0 일부)
 
-홍대입구역 주변 약 1km × 1km를 OpenStreetMap 데이터로 만들었습니다. 건물 2,225동, 도로, 지하철 출입구 9곳, 간판 약 1,380개, 보행자 90명이 있습니다.
+홍대입구역 주변 약 1km × 1km를 OpenStreetMap 데이터로 만들었습니다. 건물 2,225동, 도로, 지하철 출입구 9곳, 보행자 90명이 있습니다. 간판은 약 9,300개이고, 업종별 가상 상호와 폰트 44종으로 미리 그린 그림 2,855종을 씁니다. 실사 질감은 Poly Haven CC0 텍스처입니다.
 
 ## 구조
 
 ```
 crates/kta-core      게임 코어(Rust): 데이터 형식, 절차적 메시 생성, 충돌, 보행자
 crates/kta-wasm      wasm-bindgen 바인딩
-crates/kta-datatool  OSM → 압축 타일 + 간판 라벨 변환 도구
+crates/kta-datatool  OSM → 압축 타일 + 간판 요청 목록 변환 도구
+tools/signgen        간판 그림 생성기(빌드 때만 실행, 폰트는 배포하지 않음)
+tools/asset-pipeline 사진 텍스처(CC0) 내려받기·KTX2 압축
 web/                 Three.js 렌더러, HUD, 입력 (Vite)
 data-src/osm         원본 지도 데이터
 ```
@@ -27,11 +29,12 @@ data-src/osm         원본 지도 데이터
 
 ```bash
 cd web && npm ci && cd ..
-./scripts/build.sh          # 데이터 변환 → WASM 빌드 → 웹 번들(web/dist)
+(cd tools/signgen && npm ci)   # 간판 그림을 다시 만들 때만 필요(폰트 약 360MB)
+./scripts/build.sh          # 데이터 변환 → 간판 그림 → WASM 빌드 → 웹 번들(web/dist)
 cd web && npm run preview   # http://localhost:4173
 ```
 
-`web/src/wasm`(WASM 빌드 결과)와 `web/public/data`(변환된 지도)는 저장소에 포함합니다. 그래서 웹 쪽만 빌드할 때는 Rust 없이 `cd web && npm ci && npm run build`로 충분합니다.
+`web/src/wasm`(WASM 빌드 결과), `web/public/data`(변환된 지도), `web/public/textures`(압축 텍스처·간판 그림)는 저장소에 포함합니다. 그래서 웹 쪽만 빌드할 때는 Rust 없이 `cd web && npm ci && npm run build`로 충분합니다.
 
 ## 조작
 

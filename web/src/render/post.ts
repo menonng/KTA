@@ -66,11 +66,34 @@ uniform float uContrast;
 uniform float uSat;
 uniform float uVignette;
 uniform float uBloom;
+uniform vec2 uTexel;
 varying vec2 vUv;
+vec3 fetchS(vec2 uv) { return texture2D(tScene, uv).rgb; }
+// Perceptual luma for edge detection on HDR input.
+float lumP(vec3 c) { float l = dot(c, vec3(0.299, 0.587, 0.114)) * uExposure / 0.6; return l / (1.0 + l); }
+// FXAA (console variant) on the HDR scene, before tone mapping.
+vec3 fxaa(vec2 uv) {
+  vec3 cM = fetchS(uv);
+  float lM = lumP(cM);
+  float lNW = lumP(fetchS(uv + vec2(-1.0, -1.0) * uTexel));
+  float lNE = lumP(fetchS(uv + vec2(1.0, -1.0) * uTexel));
+  float lSW = lumP(fetchS(uv + vec2(-1.0, 1.0) * uTexel));
+  float lSE = lumP(fetchS(uv + vec2(1.0, 1.0) * uTexel));
+  float lMin = min(lM, min(min(lNW, lNE), min(lSW, lSE)));
+  float lMax = max(lM, max(max(lNW, lNE), max(lSW, lSE)));
+  if (lMax - lMin < max(0.0312, lMax * 0.125)) return cM;
+  vec2 dir = vec2(-((lNW + lNE) - (lSW + lSE)), (lNW + lSW) - (lNE + lSE));
+  float red = max((lNW + lNE + lSW + lSE) * 0.03125, 1.0 / 128.0);
+  dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + red), -8.0, 8.0) * uTexel;
+  vec3 a = 0.5 * (fetchS(uv + dir * (1.0 / 3.0 - 0.5)) + fetchS(uv + dir * (2.0 / 3.0 - 0.5)));
+  vec3 b = a * 0.5 + 0.25 * (fetchS(uv - dir * 0.5) + fetchS(uv + dir * 0.5));
+  float lB = lumP(b);
+  return (lB < lMin || lB > lMax) ? a : b;
+}
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 void main() {
-  vec3 c = texture2D(tScene, vUv).rgb + texture2D(tBloom, vUv).rgb * uBloom;
+  vec3 c = fxaa(vUv) + texture2D(tBloom, vUv).rgb * uBloom;
   c *= uExposure * uTint / 0.6; // same pre-scale as three.js ACESFilmic
   float L = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c *= mix(uShadow, uHigh, smoothstep(0.02, 0.8, L));
@@ -127,6 +150,7 @@ export class Post {
         uSat: { value: 1 },
         uVignette: { value: 0.3 },
         uBloom: { value: 0.3 },
+        uTexel: { value: new THREE.Vector2() },
       },
       depthTest: false,
       depthWrite: false,
@@ -139,27 +163,43 @@ export class Post {
   }
 
   setSize(w: number, h: number) {
-    const mk = (sw: number, sh: number, depth: boolean) =>
-      new THREE.WebGLRenderTarget(Math.max(1, sw), Math.max(1, sh), {
+    // Packed R11G11B10 float colour (4 B/px instead of 8) where renderable:
+    // HDR range kept, alpha not needed. Halves bandwidth of every pass.
+    const packed = this.renderer.extensions.has('EXT_color_buffer_float');
+    const mk = (sw: number, sh: number, depth: boolean) => {
+      const t = new THREE.WebGLRenderTarget(Math.max(1, sw), Math.max(1, sh), {
         type: THREE.HalfFloatType,
+        format: packed ? THREE.RGBFormat : THREE.RGBAFormat,
         depthBuffer: depth,
         stencilBuffer: false,
         minFilter: THREE.LinearFilter,
         magFilter: THREE.LinearFilter,
       });
+      if (packed) t.texture.internalFormat = 'R11F_G11F_B10F';
+      return t;
+    };
+    const bpp = packed ? 4 : 8;
     this.scene?.dispose();
     this.down.forEach((t) => t.dispose());
     this.up.forEach((t) => t.dispose());
     this.scene = mk(w, h, true);
     this.down = [4, 8, 16].map((d) => mk(Math.ceil(w / d), Math.ceil(h / d), false));
     this.up = [4, 8].map((d) => mk(Math.ceil(w / d), Math.ceil(h / d), false));
-    this.bytes = w * h * (8 + 4) + [...this.down, ...this.up].reduce((s, t) => s + t.width * t.height * 8, 0);
+    this.bytes = w * h * (bpp + 4) + [...this.down, ...this.up].reduce((s, t) => s + t.width * t.height * bpp, 0);
+    this.compMat.uniforms.uTexel.value.set(1 / w, 1 / h);
   }
 
   private pass(mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null) {
     this.quad.material = mat;
     this.renderer.setRenderTarget(target);
     this.renderer.render(this.qscene, this.cam);
+  }
+
+  /** Compile scene programs for the HDR target ahead of the first frame. */
+  compile(scene: THREE.Scene, camera: THREE.Camera) {
+    this.renderer.setRenderTarget(this.scene);
+    this.renderer.compile(scene, camera);
+    this.renderer.setRenderTarget(null);
   }
 
   render(scene: THREE.Scene, camera: THREE.Camera, g: Grade) {

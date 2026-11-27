@@ -17,7 +17,11 @@ export class Hud {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   readonly debug: HTMLElement;
-  private bPath = new Path2D();
+  // Building outlines bucketed into 64 m tiles: only tiles inside the 110 m
+  // view circle are filled each redraw (about a tenth of the map).
+  private bTiles = new Map<string, Path2D>();
+  private last = { px: NaN, pz: NaN, pyaw: NaN, camYaw: NaN };
+  private text = { clock: '', day: '', money: '', place: '' };
   private roadPaths: { path: Path2D; width: number; color: string }[] = [];
   private entrances: { x: number; z: number; no: number }[] = [];
 
@@ -42,13 +46,16 @@ export class Hud {
     const b = d.buildings;
     for (let i = 0; i < b.length; ) {
       const n = b[i++];
+      const key = `${Math.floor(b[i] / 64)},${Math.floor(b[i + 1] / 64)}`;
+      let path = this.bTiles.get(key);
+      if (!path) this.bTiles.set(key, (path = new Path2D()));
       for (let k = 0; k < n; k++) {
         const x = b[i++];
         const z = b[i++];
-        if (k === 0) this.bPath.moveTo(x, z);
-        else this.bPath.lineTo(x, z);
+        if (k === 0) path.moveTo(x, z);
+        else path.lineTo(x, z);
       }
-      this.bPath.closePath();
+      path.closePath();
     }
     const groups = new Map<string, { path: Path2D; width: number; color: string }>();
     const r = d.roads;
@@ -74,16 +81,29 @@ export class Hud {
   update(hours: number, dayIndex: number, money: number, px: number, pz: number, pyaw: number, camYaw: number) {
     const h = Math.floor(hours) % 24;
     const m = Math.floor((hours % 1) * 60);
-    this.clock.textContent = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    this.day.textContent = DAYS[dayIndex % 7];
-    this.money.textContent = `₩ ${money.toLocaleString('ko-KR')}`;
+    // Touch the DOM only when a string changes (avoids per-frame style/layout).
+    this.setText('clock', this.clock, `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    this.setText('day', this.day, DAYS[dayIndex % 7]);
+    this.setText('money', this.money, `₩ ${money.toLocaleString('ko-KR')}`);
     let best = { d: Infinity, no: 0 };
     for (const e of this.entrances) {
       const d = Math.hypot(e.x - px, e.z - pz);
       if (d < best.d) best = { d, no: e.no };
     }
-    this.place.textContent = best.d < 90 && best.no > 0 ? `홍대입구역 ${best.no}번 출구 부근` : '홍대입구 일대';
-    this.drawMinimap(px, pz, pyaw, camYaw);
+    this.setText('place', this.place, best.d < 90 && best.no > 0 ? `홍대입구역 ${best.no}번 출구 부근` : '홍대입구 일대');
+    // Redraw the minimap only when the view actually changed.
+    const l = this.last;
+    if (Math.abs(px - l.px) > 0.03 || Math.abs(pz - l.pz) > 0.03 || Math.abs(pyaw - l.pyaw) > 0.003 || Math.abs(camYaw - l.camYaw) > 0.002 || Number.isNaN(l.px)) {
+      Object.assign(l, { px, pz, pyaw, camYaw });
+      this.drawMinimap(px, pz, pyaw, camYaw);
+    }
+  }
+
+  private setText(k: keyof Hud['text'], el: HTMLElement, v: string) {
+    if (this.text[k] !== v) {
+      this.text[k] = v;
+      el.textContent = v;
+    }
   }
 
   private drawMinimap(px: number, pz: number, pyaw: number, camYaw: number) {
@@ -108,7 +128,14 @@ export class Hud {
       c.stroke(g.path);
     }
     c.fillStyle = '#39424b';
-    c.fill(this.bPath);
+    const tx = Math.floor(px / 64);
+    const tz = Math.floor(pz / 64);
+    for (let dz = -3; dz <= 3; dz++) {
+      for (let dx = -3; dx <= 3; dx++) {
+        const p = this.bTiles.get(`${tx + dx},${tz + dz}`);
+        if (p) c.fill(p);
+      }
+    }
     for (const e of this.entrances) {
       c.beginPath();
       c.arc(e.x, e.z, 5, 0, Math.PI * 2);

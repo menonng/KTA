@@ -1,0 +1,26 @@
+{
+  "source": "Poly Haven (https://polyhaven.com), CC0 1.0",
+  "arrays": {
+    "walls": {
+      "layers": [
+        { "id": "red_brick_03", "m": 1.8, "note": "villa red brick (적벽돌)" },
+        { "id": "brick_wall_10", "m": 1.8, "note": "brown brick" },
+        { "id": "beige_wall_001", "m": 2.5, "note": "painted plaster, tinted per building" },
+        { "id": "rectangular_facade_tiles", "m": 1.2, "note": "small facade tiles (2000s 상가)" },
+        { "id": "rectangular_facade_tiles_02", "m": 1.2, "note": "brown facade tiles" },
+        { "id": "granite_tile_03", "m": 2.0, "note": "ground floor granite cladding (화강석)" },
+        { "id": "concrete_wall_004", "m": 3.0, "note": "concrete panels" },
+        { "id": "exterior_wall_cladding", "m": 1.8, "note": "exterior cladding" },
+        { "id": "concrete_floor_02", "m": 3.0, "note": "roof concrete" }
+      ]
+    },
+    "ground": {
+      "layers": [
+        { "id": "asphalt_02", "m": 4.0, "note": "road asphalt" },
+        { "id": "brick_pavement_02", "m": 2.0, "note": "sidewalk blocks (보도블록)" },
+        { "id": "interlocking_concrete_pavers", "m": 2.0, "note": "pedestrian street pavers" },
+        { "id": "concrete_pavers_03", "m": 2.0, "note": "plaza pavers" }
+      ]
+    }
+  }
+}

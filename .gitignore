@@ -3,3 +3,6 @@
 /web/dist
 /web/test-output
 *.log
+/tools/signgen/node_modules
+/tools/signgen/work
+/tools/signgen/fonts.css

@@ -77,6 +77,7 @@ export class PropStreamer {
     g.setIndex(new THREE.BufferAttribute(idx, 1).onUpload(disposeArray));
     g.computeBoundingSphere();
     (g.getAttribute('position') as THREE.BufferAttribute).onUpload(disposeArray);
+    (g.getAttribute('position') as THREE.BufferAttribute).onUpload(disposeArray);
     const mesh = new THREE.Mesh(g, this.material);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -94,6 +95,7 @@ export function buildStreetDetails(game: Game, scene: THREE.Scene, night: { valu
   const wg = new THREE.BufferGeometry();
   wg.setAttribute('position', new THREE.BufferAttribute(w, 3));
   wg.computeBoundingSphere();
+  (wg.getAttribute('position') as THREE.BufferAttribute).onUpload(disposeArray);
   (wg.getAttribute('position') as THREE.BufferAttribute).onUpload(disposeArray);
   const wires = new THREE.LineSegments(wg, new THREE.LineBasicMaterial({ color: 0x1b1d20 }));
   wires.matrixAutoUpdate = false;

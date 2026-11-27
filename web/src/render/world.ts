@@ -4,23 +4,70 @@
 
 import * as THREE from 'three';
 import type { Game } from '../wasm/kta_wasm.js';
+import type { TextureSet } from './textures';
 
 const HASH = /* glsl */ `
 // Sine-free hashes (stable for large inputs on all GPUs).
 float kH1(float n) { n = fract(n * 0.1031); n *= n + 33.33; n *= n + n; return fract(n); }
 float kH2(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
-// Box-filtered periodic pulse (1 inside [a,b] of each unit period): kills
-// aliasing of procedural windows at distance without textures or mipmaps.
-float kPI(float x, float a, float b) { return floor(x) * (b - a) + clamp(fract(x), a, b) - a; }
 float kN(vec2 p) {
   vec2 i = floor(p);
   vec2 f = fract(p);
   f = f * f * (3.0 - 2.0 * f);
   return mix(mix(kH2(i), kH2(i + vec2(1.0, 0.0)), f.x), mix(kH2(i + vec2(0.0, 1.0)), kH2(i + vec2(1.0, 1.0)), f.x), f.y);
 }
+// Box-filtered periodic pulse: anti-aliased procedural lines without textures.
+float kPI(float x, float a, float b) { return floor(x) * (b - a) + clamp(fract(x), a, b) - a; }
 float kPulse(float x, float a, float b, float w) {
   w = max(w, 1e-4);
   return clamp((kPI(x + 0.5 * w, a, b) - kPI(x - 0.5 * w, a, b)) / w, 0.0, 1.0);
+}
+`;
+
+// Interior mapping: ray-cast into a box room behind each window (GTA V style).
+// p in room meters (x across, y up, z=0 at glass), r ray in facade space (z into room).
+const INTERIOR = /* glsl */ `
+vec3 kRoom(vec2 cell, vec3 r, vec3 size, float seed, float shop, out float back) {
+  vec3 p = vec3(cell.x * size.x, cell.y * size.y, 0.0);
+  r.z = max(r.z, 0.08);
+  float tx = r.x > 0.0 ? (size.x - p.x) / r.x : (r.x < 0.0 ? -p.x / r.x : 1e5);
+  float ty = r.y > 0.0 ? (size.y - p.y) / r.y : (r.y < 0.0 ? -p.y / r.y : 1e5);
+  float tz = size.z / r.z;
+  float t = min(min(tx, ty), tz);
+  vec3 h = p + r * t;
+  float hw = kH1(seed * 3.1);
+  vec3 wallC = shop > 0.5 ? (hw < 0.4 ? vec3(0.85, 0.85, 0.83) : hw < 0.7 ? vec3(0.55, 0.42, 0.32) : vec3(0.3, 0.32, 0.35)) : (hw < 0.33 ? vec3(0.86, 0.82, 0.74) : hw < 0.66 ? vec3(0.78, 0.84, 0.88) : vec3(0.9, 0.86, 0.8));
+  vec3 c;
+  back = 0.0;
+  if (t == tz) {
+    back = 1.0;
+    c = wallC;
+    float fx = h.x / size.x;
+    if (shop > 0.5) {
+      // Shelves with goods on the back wall.
+      float sy = fract(h.y / 0.45);
+      float g = kH2(floor(vec2(h.x / 0.22, h.y / 0.45)) + seed);
+      vec3 goods = g < 0.25 ? vec3(0.85, 0.25, 0.2) : g < 0.5 ? vec3(0.95, 0.8, 0.3) : g < 0.75 ? vec3(0.2, 0.45, 0.8) : vec3(0.9, 0.9, 0.88);
+      float shelfOn = step(0.5, kH1(seed * 4.1));
+      c = mix(c, goods * (0.6 + 0.4 * kH1(g * 9.0)), shelfOn * step(0.22, sy) * step(h.y, 2.0) * 0.9);
+      c = mix(c, vec3(0.45), shelfOn * step(sy, 0.08) * step(h.y, 2.05));
+      // Poster / menu board when no shelves.
+      c = mix(c, mix(vec3(0.95, 0.85, 0.3), vec3(0.9, 0.35, 0.3), step(0.5, kH1(seed))), (1.0 - shelfOn) * step(abs(fx - 0.5), 0.3) * step(abs(h.y - 1.7), 0.35));
+    } else {
+      float fpos = 0.25 + 0.5 * kH1(seed * 5.7);
+      if (h.y < 0.85 && abs(fx - fpos) < 0.22) c *= 0.32;                    // sofa / desk
+      if (h.y > 1.25 && h.y < 1.85 && abs(fx - (1.0 - fpos)) < 0.12 && kH1(seed * 2.9) > 0.45) c = vec3(0.32, 0.26, 0.2); // frame / shelf
+      if (kH1(seed * 7.3) > 0.7 && h.y < 1.9 && abs(fx - 0.85) < 0.08) c = vec3(0.25, 0.3, 0.22); // plant
+    }
+  } else if (t == ty) {
+    c = r.y < 0.0 ? (shop > 0.5 ? mix(vec3(0.5, 0.48, 0.45), vec3(0.32, 0.24, 0.18), step(0.5, hw)) : vec3(0.42, 0.3, 0.2)) : vec3(0.95);
+    if (r.y > 0.0) c += vec3(1.6, 1.5, 1.3) * smoothstep(0.35, 0.0, length(vec2(h.x / size.x - 0.5, h.z / size.z - 0.5))) * 0.6;
+  } else {
+    c = wallC * 0.82;
+    if (shop > 0.5) c = mix(c, vec3(0.7, 0.6, 0.4), step(0.3, fract(h.y / 0.45)) * step(h.y, 2.0) * 0.5);
+  }
+  c *= mix(1.0, 0.6, h.z / size.z);
+  return c;
 }
 `;
 
@@ -30,108 +77,155 @@ float fV = vFacade.y * 0.01;
 float fSeed = floor(vFacadeId.x + 0.5);
 float fKf = floor(vFacadeId.y + 0.5);
 float fKind = mod(fKf, 16.0);
+float fShopE = step(7.5, fKind); // street-facing shop-front wall
+fKind = mod(fKind, 8.0);
 float fRoof = mod(floor(fKf / 16.0), 2.0);
 float fH = floor(fKf / 32.0) * 0.5;
 float floorH = 3.3;
 float colW = 2.2 + kH1(fSeed * 2.1) * 1.8;
 vec2 gp = vec2(fU / colW, fV / floorH);
 vec2 gw = fwidth(gp);
-float mw = 1.5 + kH1(fSeed * 7.7) * 1.5;
-float mx = fU / mw;
-float mwid = fwidth(mx);
-float farF = smoothstep(0.22, 0.65, max(gw.x, gw.y));
-float fRough = 0.88;
+float farF = smoothstep(0.2, 0.6, max(gw.x, gw.y));
+float fRough = 0.86;
 vec3 fEmis = vec3(0.0);
 vec3 fCol;
+vec3 fNt = vec3(0.0, 0.0, 1.0);
+vec3 nW0 = normalize(vWN);
+vec3 rd = normalize(vWP - cameraPosition);
+vec3 Tw = normalize(vec3(-nW0.z, 0.0, nW0.x) + vec3(1e-5));
+vec3 rT = vec3(dot(rd, Tw), rd.y, -dot(rd, nW0));
+float fres = 0.04 + 0.96 * pow(1.0 - clamp(abs(dot(rd, nW0)), 0.0, 1.0), 5.0);
+vec3 skyRefl;
+{
+  // Cheap reflection probe: sky gradient above a jagged skyline of buildings.
+  vec3 rr = reflect(rd, nW0);
+  float az = atan(rr.x, rr.z);
+  float sky = 0.06 + 0.22 * kN(vec2(az * 7.0, 1.0)) + 0.1 * step(0.7, kN(vec2(az * 23.0, 4.0)));
+  vec3 skyC = mix(uHorizon, uTop, pow(clamp(rr.y, 0.0, 1.0), 0.55)) * 1.1;
+  vec3 bld = mix(vec3(0.16, 0.16, 0.17), vec3(0.012, 0.012, 0.018), uNight);
+  vec2 wg = vec2(az * 40.0, rr.y * 60.0);
+  bld += vec3(1.0, 0.8, 0.55) * uNight * 0.5 * step(0.72, kH2(floor(wg))) * step(0.3, fract(wg.x)) * step(0.35, fract(wg.y));
+  vec3 grd = mix(vec3(0.1, 0.1, 0.1), vec3(0.015), uNight);
+  skyRefl = rr.y < 0.0 ? grd : (rr.y < sky ? bld : skyC);
+}
 if (fRoof > 0.5) {
-  fCol = vec3(0.47, 0.47, 0.45) * (0.9 + 0.1 * kH1(fSeed * 1.9)) * (0.85 + 0.22 * kN(vec2(fU, fV) * 0.35));
-  if (kH1(fSeed * 3.7) > 0.86) fCol = vec3(0.28, 0.42, 0.30);
-  else if (kH1(fSeed * 5.3) > 0.82) fCol = vec3(0.30, 0.45, 0.42);
+  vec2 uv = vec2(fU, fV) / 3.0;
+  fCol = texture(tWallA, vec3(uv, 8.0)).rgb * (0.85 + 0.25 * kH1(fSeed * 1.9));
+  fNt = texture(tWallN, vec3(uv, 8.0)).xyz * 2.0 - 1.0;
+  if (kH1(fSeed * 3.7) > 0.86) fCol *= vec3(0.62, 0.95, 0.66);
+  else if (kH1(fSeed * 5.3) > 0.82) fCol *= vec3(0.6, 0.92, 0.9);
 } else {
   float r = kH1(fSeed * 1.37 + 3.1);
-  vec3 wall;
-  if (r < 0.18) wall = vec3(0.50, 0.26, 0.19);
-  else if (r < 0.34) wall = vec3(0.80, 0.74, 0.62);
-  else if (r < 0.50) wall = vec3(0.86, 0.86, 0.83);
-  else if (r < 0.63) wall = vec3(0.58, 0.58, 0.56);
-  else if (r < 0.72) wall = vec3(0.33, 0.34, 0.36);
-  else if (r < 0.82) wall = vec3(0.82, 0.68, 0.61);
-  else if (r < 0.91) wall = vec3(0.62, 0.53, 0.43);
-  else wall = vec3(0.38, 0.48, 0.55);
-  wall *= 0.92 + 0.08 * kH1(fSeed * 6.1);
-  float winW = 0.40 + kH1(fSeed * 4.3) * 0.32;
-  float winH = 0.40 + kH1(fSeed * 5.9) * 0.22;
-  float band = kPulse(gp.y, 0.0, 0.035, gw.y);
-  // Procedural wall materials (no textures): brick, tile, plaster with stains.
-  bool brick = r < 0.18 || (r >= 0.82 && r < 0.91);
-  bool tile = (r >= 0.18 && r < 0.34) || (r >= 0.72 && r < 0.82);
-  vec3 wcol = wall;
-  if (brick) {
-    vec2 bp = vec2(fU / 0.23, fV / 0.075);
-    bp.x += mod(floor(bp.y), 2.0) * 0.5;
-    vec2 bw = fwidth(bp);
-    float mortar = max(kPulse(bp.x, 0.0, 0.09, bw.x), kPulse(bp.y, 0.0, 0.14, bw.y));
-    float bv = mix(kH2(floor(bp) + fSeed), 0.5, smoothstep(0.3, 0.8, max(bw.x, bw.y)));
-    wcol = wall * (0.8 + 0.34 * bv);
-    wcol = mix(wcol, vec3(0.6, 0.58, 0.54), mortar * 0.75);
-  } else if (tile) {
-    vec2 tp = vec2(fU, fV) / 0.3;
-    vec2 tw = fwidth(tp);
-    float grout = max(kPulse(tp.x, 0.0, 0.07, tw.x), kPulse(tp.y, 0.0, 0.07, tw.y));
-    float tv = mix(kH2(floor(tp) + fSeed * 1.3), 0.5, smoothstep(0.3, 0.8, max(tw.x, tw.y)));
-    wcol = wall * (0.93 + 0.12 * tv);
-    wcol = mix(wcol, wall * 0.72, grout * 0.7);
-  }
-  float stain = kN(vec2(fU * 0.35, fV * 0.2) + fSeed);
-  float streak = kN(vec2(fU * 1.7, fV * 0.06) + fSeed * 2.0);
-  wcol *= (0.9 + 0.13 * stain) * (1.0 - 0.13 * smoothstep(0.55, 0.92, streak));
-  fCol = wcol * (1.0 - 0.12 * band);
-  bool shop = fKind != 1.0 || kH1(fSeed * 9.1) > 0.55;
-  if (fV < 2.95 && shop) {
-    float glass = (1.0 - kPulse(mx, 0.0, 0.035, mwid)) * step(0.22, fV) * step(fV, 2.78);
-    // Fake shop interior: lit back wall, shelf silhouettes, ceiling light band.
-    float bay = floor(mx);
-    float hb = kH1(bay * 1.7 + fSeed);
-    vec3 roomC = hb < 0.35 ? vec3(0.95, 0.97, 1.0) : hb < 0.7 ? vec3(1.0, 0.82, 0.58) : vec3(1.0, 0.68, 0.5);
-    float sx = fU / 0.9 + hb * 3.0;
-    float shelf = kPulse(sx, 0.15, 0.55, fwidth(sx)) * step(0.5, fV) * step(fV, 1.9) * step(0.4, hb);
-    float ceil = smoothstep(2.35, 2.6, fV);
-    vec3 room = roomC * (0.55 + 0.45 * ceil) * (1.0 - 0.55 * shelf * (1.0 - farF));
-    vec3 refl = mix(vec3(0.08, 0.1, 0.12), vec3(0.32, 0.38, 0.45), smoothstep(0.4, 2.8, fV));
-    float lit = mix(step(0.2, kH1(bay + fSeed)), 0.8, farF);
-    fCol = mix(vec3(0.2, 0.2, 0.21), refl, glass);
-    fRough = mix(0.6, 0.1, glass);
-    float counter = 1.0 - 0.6 * (1.0 - smoothstep(0.9, 1.1, fV));
-    fEmis = room * (0.02 + 0.09 * uNight) * lit * glass * counter;
-  } else if (fV < floorH && shop) {
-    fCol = wall * 0.72;
+  float layer = 2.0;
+  float scale = 2.5;
+  vec3 tint = vec3(1.0);
+  if (r < 0.18) { layer = 0.0; scale = 1.8; }
+  else if (r < 0.34) { layer = 3.0; scale = 1.2; }
+  else if (r < 0.50) { layer = 2.0; scale = 2.5; tint = vec3(1.18, 1.17, 1.14); }
+  else if (r < 0.63) { layer = 6.0; scale = 3.0; }
+  else if (r < 0.72) { layer = 7.0; scale = 1.8; tint = vec3(1.05); }
+  else if (r < 0.82) { layer = 4.0; scale = 1.2; }
+  else if (r < 0.91) { layer = 1.0; scale = 1.8; }
+  else { layer = 2.0; scale = 2.5; tint = vec3(0.78, 0.9, 1.02); }
+  tint *= 0.92 + 0.14 * kH1(fSeed * 6.1);
+  vec2 wuv = vec2(fU, fV) / scale + vec2(kH1(fSeed * 8.3), kH1(fSeed * 9.7));
+  vec3 wcol = texture(tWallA, vec3(wuv, layer)).rgb * tint;
+  fNt = texture(tWallN, vec3(wuv, layer)).xyz * 2.0 - 1.0;
+  float streak = kN(vec2(fU * 1.4, fV * 0.05) + fSeed * 2.0);
+  wcol *= 1.0 - 0.14 * smoothstep(0.62, 0.95, streak) * smoothstep(fH, fH - 6.0, fV);
+  float band = kPulse(gp.y, 0.0, 0.03, gw.y);
+  fCol = wcol * (1.0 - 0.14 * band);
+  bool shop = fShopE > 0.5;
+  if (fV < floorH && shop) {
+    // Ground floor: granite cladding, aluminum frames, deep shop interiors.
+    vec2 guv = vec2(fU, fV) / 2.0;
+    vec3 gcol = texture(tWallA, vec3(guv, 5.0)).rgb * (kH1(fSeed * 4.4) > 0.5 ? vec3(1.05) : vec3(0.58, 0.56, 0.54));
+    vec3 gn = texture(tWallN, vec3(guv, 5.0)).xyz * 2.0 - 1.0;
+    float mw = 1.6 + kH1(fSeed * 7.7) * 1.4;
+    float mx = fU / mw;
+    float mwid = fwidth(mx);
+    float inY = step(0.35, fV) * step(fV, 2.7);
+    float glass = (1.0 - kPulse(mx, 0.0, 0.07, mwid)) * inY;
+    float frame = clamp((1.0 - kPulse(mx, 0.0, 0.04, mwid)) * step(0.3, fV) * step(fV, 2.76) - glass, 0.0, 1.0);
+    fCol = mix(gcol, vec3(0.55, 0.57, 0.6), frame);
+    fNt = mix(gn, vec3(0.0, 0.0, 1.0), frame);
+    fRough = mix(0.55, 0.35, frame);
+    if (glass > 0.001) {
+      float bay = floor(mx);
+      float bs = kH1(bay * 1.7 + fSeed);
+      float back;
+      vec2 cell = vec2(fract(mx), clamp((fV - 0.35) / 2.35, 0.0, 1.0));
+      vec3 room = vec3(0.7);
+      if (farF < 0.999) room = kRoom(cell, rT, vec3(mw, 2.35, 6.0), bay + fSeed, 1.0, back); // skip the ray-cast where it is faded out
+      vec3 lightC = bs < 0.35 ? vec3(1.0, 1.0, 1.02) : bs < 0.7 ? vec3(1.0, 0.86, 0.66) : vec3(1.0, 0.74, 0.55);
+      float on = mix(step(0.15, kH1(bay + fSeed * 0.3)), 0.85, farF);
+      vec3 inside = mix(room * lightC, vec3(0.75, 0.7, 0.62), farF);
+      float level = mix(0.075, 0.62, uNight) * on;
+      fCol = mix(fCol, vec3(0.02), glass);
+      fNt = mix(fNt, vec3(0.0, 0.0, 1.0), glass);
+      fRough = mix(fRough, 0.06, glass);
+      fres = max(fres, 0.12);
+      fEmis = (inside * level * vec3(0.86, 0.92, 0.9) * (1.0 - fres) + skyRefl * fres) * glass;
+    }
+    if (fV > 2.76) fCol = gcol * 0.85;
   } else if (fV >= floorH) {
+    float winW = 0.40 + kH1(fSeed * 4.3) * 0.32;
+    float winH = 0.42 + kH1(fSeed * 5.9) * 0.2;
     float cov = kPulse(gp.x, 0.5 - winW * 0.5, 0.5 + winW * 0.5, gw.x)
               * kPulse(gp.y, 0.3, 0.3 + winH, gw.y)
               * step(0.9, fH - fV);
-    vec3 glassC = vec3(0.1, 0.12, 0.16);
-    // Thin light frame only when windows are large on screen.
-    float frame = (1.0 - farF) * (1.0 - kPulse(gp.x, 0.5 - winW * 0.42, 0.5 + winW * 0.42, gw.x)) * cov;
-    fCol = mix(fCol, glassC, cov);
-    fCol = mix(fCol, vec3(0.7), frame);
-    // Security bars (방범창) on low floors of houses and villas.
-    float flo = floor(gp.y);
-    if ((fKind == 1.0 || fKind == 0.0) && flo <= 2.0 && kH1(fSeed * 3.3) < 0.6) {
-      float bx = fU / 0.13;
-      float bars = kPulse(bx, 0.0, 0.22, fwidth(bx)) * (1.0 - farF);
-      fCol = mix(fCol, vec3(0.78, 0.78, 0.75), bars * cov * 0.9);
+    float frameW = (1.0 - farF) * (1.0 - kPulse(gp.x, 0.5 - winW * 0.44, 0.5 + winW * 0.44, gw.x)
+              * kPulse(gp.y, 0.3 + winH * 0.04, 0.3 + winH * 0.96, gw.y)) * cov;
+    float glassA = cov - frameW;
+    // Recess shadow just inside the frame (top/left) for depth.
+    if (glassA > 0.001) {
+      vec2 cell = vec2(fract(gp.x), fract(gp.y));
+      float back;
+      vec2 wc = floor(gp);
+      float ws = kH2(wc + fSeed * 0.37);
+      vec3 room = vec3(0.6);
+      if (farF < 0.999) {
+        room = kRoom(cell, rT, vec3(colW, floorH, colW * 1.3), ws * 97.0, 0.0, back);
+        // Curtains / blinds on some windows.
+        float wy = (cell.y - 0.3) / winH;
+        float blinds = step(0.72, kH1(ws * 9.1)) * step(1.0 - kH1(ws * 3.3) * 0.7, wy);
+        room = mix(room, vec3(0.86, 0.84, 0.78) * (0.85 + 0.15 * step(0.5, fract(wy * 18.0))), blinds);
+        float curtain = step(0.8, kH1(ws * 5.9)) * step(abs(fract(gp.x) - 0.5), winW * 0.5) * step(winW * 0.22, abs(fract(gp.x) - 0.5));
+        room = mix(room, mix(vec3(0.7, 0.55, 0.45), vec3(0.5, 0.6, 0.7), kH1(ws * 1.3)), curtain);
+      }
+      float lit = step(0.5, ws);
+      vec3 lightC = mix(vec3(1.0, 0.78, 0.5), vec3(0.75, 0.86, 1.0), step(0.85, ws));
+      float level = mix(0.05, 0.85 * lit + 0.025, uNight);
+      vec3 inside = mix(room * mix(vec3(1.0), lightC, uNight), vec3(0.55, 0.5, 0.45) * mix(0.5, 0.48 + 0.0 * lit, uNight), farF);
+      fCol = mix(fCol, vec3(0.02), glassA);
+      fRough = mix(fRough, 0.05, glassA);
+      fNt = mix(fNt, vec3(0.0, 0.0, 1.0), cov);
+      float fr2 = max(fres, 0.16);
+      fEmis = (inside * level * (1.0 - fr2) + skyRefl * fr2) * glassA;
+      // Security bars (방범창) on low floors of houses and villas.
+      if ((fKind == 1.0 || fKind == 0.0) && floor(gp.y) <= 2.0 && kH1(fSeed * 3.3) < 0.6) {
+        float bx = fU / 0.13;
+        float bars = kPulse(bx, 0.0, 0.2, fwidth(bx)) * (1.0 - farF) * glassA;
+        fCol = mix(fCol, vec3(0.72, 0.72, 0.7), bars);
+        fEmis *= 1.0 - bars;
+      }
     }
-    fRough = mix(0.88, 0.12, cov);
-    float wr = kH2(floor(gp) + fSeed * 0.37);
-    vec3 warm = mix(vec3(1.0, 0.78, 0.5), vec3(0.72, 0.84, 1.0), step(0.86, wr));
-    warm = mix(warm, vec3(0.95, 0.82, 0.62), farF);
-    float lit = mix(step(0.52, wr) * (0.7 + 0.6 * kH1(wr * 10.0)), 0.45, farF);
-    fEmis = warm * 0.5 * uNight * lit * (cov - frame);
+    fCol = mix(fCol, vec3(0.78, 0.79, 0.8), frameW);
   }
-  if (fH - fV < 0.35) fCol = wall * 0.66;
-  fCol *= mix(0.6, 1.0, smoothstep(0.0, 1.4, fV));
+  if (fH - fV < 0.32) fCol *= 0.82;
 }
 diffuseColor.rgb = fCol;
+`;
+
+// Apply the material normal map in facade tangent space (walls) or roof space.
+const FACADE_NORMAL = /* glsl */ `
+{
+  vec3 Bw = vec3(0.0, 1.0, 0.0);
+  vec3 Tn = Tw;
+  if (fRoof > 0.5) { Tn = vec3(1.0, 0.0, 0.0); Bw = vec3(0.0, 0.0, -1.0); }
+  vec3 nP = normalize(Tn * fNt.x * 0.9 + Bw * fNt.y * 0.9 + nW0 * max(fNt.z, 0.25));
+  normal = normalize((viewMatrix * vec4(nP, 0.0)).xyz);
+}
 `;
 
 const ROAD = /* glsl */ `
@@ -140,45 +234,54 @@ float rX = vRoad.y;
 float rOne = step(15.5, vRoad.z);
 float rK = mod(vRoad.z, 16.0);
 float rHw = vRoad.w;
-vec3 rc = vec3(0.15, 0.15, 0.16) * (0.84 + 0.2 * kN(vec2(rA, rX) * 0.9)) * (0.9 + 0.14 * kN(vec2(rA, rX) * 0.07 + 13.0));
-if (rK > 8.5) {
-  vec2 t = vec2(rA, rX) / 0.55;
-  vec2 tw = fwidth(t);
-  float jo = max(kPulse(t.x, 0.9, 1.0, tw.x), kPulse(t.y, 0.9, 1.0, tw.y));
-  rc = mix(vec3(0.6, 0.58, 0.54), vec3(0.42, 0.41, 0.39), jo);
-} else if (rK > 5.5 && rK < 6.5) {
-  vec2 t = vec2(rA / 0.9, rX / 0.45);
-  float ox = t.x + floor(t.y) * 0.5;
-  vec2 tw = fwidth(t);
-  float jo = max(kPulse(ox, 0.9, 1.0, tw.x), kPulse(t.y, 0.86, 1.0, tw.y));
-  float far = smoothstep(0.3, 0.8, max(tw.x, tw.y));
-  vec3 base = mix(vec3(0.52, 0.35, 0.29), vec3(0.62, 0.55, 0.47), mix(step(0.55, kH2(vec2(floor(ox), floor(t.y)))), 0.45, far));
-  rc = mix(base, vec3(0.32, 0.28, 0.26), jo);
-} else if (rK > 6.5 && rK < 7.5) {
-  vec2 t = vec2(rA, rX) / 0.5;
-  vec2 tw = fwidth(t);
-  float jo = max(kPulse(t.x, 0.9, 1.0, tw.x), kPulse(t.y, 0.9, 1.0, tw.y));
-  rc = mix(vec3(0.56, 0.55, 0.52), vec3(0.4, 0.4, 0.38), jo);
-} else if (rK < 3.5 || rK > 7.5) {
+float gl = 0.0;
+vec2 guv = vec2(rA, rX) / 4.0;
+if (rK > 8.5) { gl = 1.0; guv = vec2(rA, rX) / 2.0; }
+else if (rK > 5.5 && rK < 6.5) { gl = 2.0; guv = vec2(rA, rX) / 2.0; }
+else if (rK > 6.5 && rK < 7.5) { gl = 1.0; guv = vec2(rA, rX) / 2.0; }
+vec3 rc = texture(tGroundA, vec3(guv, gl)).rgb;
+vec3 gNt = texture(tGroundN, vec3(guv, gl)).xyz * 2.0 - 1.0;
+if (gl < 0.5) rc *= 1.3 * (0.82 + 0.25 * kN(vec2(rA, rX) * 0.06 + 13.0));
+if (rK < 3.5 || rK > 7.5) {
   float ax = abs(rX);
   float edge = rHw - ax;
-  vec3 yel = vec3(0.86, 0.64, 0.08);
+  vec3 yel = vec3(0.8, 0.6, 0.12);
+  vec3 wht = vec3(0.78, 0.78, 0.76);
+  float wear = 0.75 + 0.25 * kN(vec2(rA * 0.8, rX * 3.0));
   if (rOne < 0.5) {
-    if (rK < 2.5 && ax > 0.08 && ax < 0.26) rc = yel;
-    if (rK >= 2.5 && ax < 0.08 && fract(rA / 8.0) < 0.5) rc = yel;
+    if (rK < 2.5 && ax > 0.08 && ax < 0.26) rc = mix(rc, yel, wear);
+    if (rK >= 2.5 && ax < 0.08 && fract(rA / 8.0) < 0.5) rc = mix(rc, yel, wear);
     float lane = ax / 3.25;
     float lf = min(fract(lane), 1.0 - fract(lane));
-    if (rK < 2.5 && ax > 1.2 && edge > 1.0 && lf < 0.035 && fract(rA / 9.0) < 0.5) rc = vec3(0.82);
+    if (rK < 2.5 && ax > 1.2 && edge > 1.0 && lf < 0.035 && fract(rA / 9.0) < 0.5) rc = mix(rc, wht, wear);
   } else {
     float fromL = rX + rHw;
     float lane = fromL / 3.25;
     float lf = min(fract(lane), 1.0 - fract(lane));
-    if (fromL > 1.0 && edge > 1.0 && lf < 0.035 && fract(rA / 9.0) < 0.5) rc = vec3(0.82);
-    if (rHw - rX > 0.15 && rHw - rX < 0.3) rc = yel; // median-side edge
+    if (fromL > 1.0 && edge > 1.0 && lf < 0.035 && fract(rA / 9.0) < 0.5) rc = mix(rc, wht, wear);
+    if (rHw - rX > 0.15 && rHw - rX < 0.3) rc = mix(rc, yel, wear);
   }
-  if (edge > 0.3 && edge < 0.45) rc = vec3(0.78);
+  if (edge > 0.3 && edge < 0.45) rc = mix(rc, wht, wear);
 }
 diffuseColor.rgb = rc;
+`;
+
+// Cotangent-frame normal mapping for flat ground surfaces.
+const GROUND_NORMAL = /* glsl */ `
+{
+  vec3 N = normalize(vGN);
+  vec3 dp1 = dFdx(vGP);
+  vec3 dp2 = dFdy(vGP);
+  vec2 duv1 = dFdx(guv);
+  vec2 duv2 = dFdy(guv);
+  vec3 dp2p = cross(dp2, N);
+  vec3 dp1p = cross(N, dp1);
+  vec3 T = dp2p * duv1.x + dp1p * duv2.x;
+  vec3 B = dp2p * duv1.y + dp1p * duv2.y;
+  float im = inversesqrt(max(max(dot(T, T), dot(B, B)), 1e-12));
+  vec3 nP = normalize(T * im * gNt.x + B * im * gNt.y + N * max(gNt.z, 0.3));
+  normal = normalize((viewMatrix * vec4(nP, 0.0)).xyz);
+}
 `;
 
 export interface WorldStats {
@@ -187,6 +290,8 @@ export interface WorldStats {
   buildingTris: number;
   roadTris: number;
   gpuBytes: number;
+  /** Night light-spill layer; hidden in daylight to skip the pass. */
+  spill: THREE.Mesh | null;
 }
 
 function disposeArray(this: THREE.BufferAttribute) {
@@ -194,40 +299,75 @@ function disposeArray(this: THREE.BufferAttribute) {
   (this as unknown as { array: unknown }).array = null;
 }
 
-export function createBuildingMaterial(night: { value: number }) {
-  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88, metalness: 0.0 });
+export interface SkyUniforms { uTop: THREE.IUniform; uHorizon: THREE.IUniform }
+
+export function createBuildingMaterial(night: { value: number }, tex: TextureSet, sky: SkyUniforms) {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.86, metalness: 0.0 });
   m.onBeforeCompile = (s) => {
     s.uniforms.uNight = night;
+    s.uniforms.tWallA = { value: tex.wallA };
+    s.uniforms.tWallN = { value: tex.wallN };
+    s.uniforms.uTop = sky.uTop;
+    s.uniforms.uHorizon = sky.uHorizon;
     s.vertexShader = s.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec4 aFacade;\nvarying vec2 vFacade;\nflat varying vec2 vFacadeId;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFacade = aFacade.xy;\nvFacadeId = aFacade.zw;');
+      .replace('#include <common>', '#include <common>\nattribute vec4 aFacade;\nvarying vec2 vFacade;\nflat varying vec2 vFacadeId;\nvarying vec3 vWP;\nvarying vec3 vWN;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFacade = aFacade.xy;\nvFacadeId = aFacade.zw;\nvWP = (modelMatrix * vec4(position, 1.0)).xyz;\nvWN = normalize(mat3(modelMatrix) * normal);');
     s.fragmentShader = s.fragmentShader
-      .replace('#include <common>', `#include <common>\nuniform float uNight;\nvarying vec2 vFacade;\nflat varying vec2 vFacadeId;\n${HASH}`)
+      .replace(
+        '#include <common>',
+        `#include <common>\nprecision highp sampler2DArray;\nuniform float uNight;\nuniform vec3 uTop;\nuniform vec3 uHorizon;\nuniform sampler2DArray tWallA;\nuniform sampler2DArray tWallN;\nvarying vec2 vFacade;\nflat varying vec2 vFacadeId;\nvarying vec3 vWP;\nvarying vec3 vWN;\n${HASH}\n${INTERIOR}`,
+      )
       .replace('#include <color_fragment>', `#include <color_fragment>\n${FACADE}`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = fRough;')
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FACADE_NORMAL}`)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += fEmis;');
   };
-  m.customProgramCacheKey = () => 'kta-facade-8';
+  m.customProgramCacheKey = () => 'kta-facade-tex-4';
   return m;
 }
 
-export function createRoadMaterial() {
-  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, metalness: 0.0 });
-  m.onBeforeCompile = (s) => {
+function groundShader(tex: TextureSet, body: string, extraVert: string) {
+  return (s: THREE.WebGLProgramParametersWithUniforms) => {
+    s.uniforms.tGroundA = { value: tex.groundA };
+    s.uniforms.tGroundN = { value: tex.groundN };
     s.vertexShader = s.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute vec4 aRoad;\nvarying vec4 vRoad;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRoad = aRoad;');
+      .replace('#include <common>', `#include <common>\nvarying vec3 vGP;\nvarying vec3 vGN;\n${extraVert}`)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGP = (modelMatrix * vec4(position, 1.0)).xyz;\nvGN = vec3(0.0, 1.0, 0.0);');
     s.fragmentShader = s.fragmentShader
-      .replace('#include <common>', `#include <common>\nvarying vec4 vRoad;\n${HASH}`)
-      .replace('#include <color_fragment>', `#include <color_fragment>\n${ROAD}`);
+      .replace('#include <common>', `#include <common>\nprecision highp sampler2DArray;\nuniform sampler2DArray tGroundA;\nuniform sampler2DArray tGroundN;\nvarying vec3 vGP;\nvarying vec3 vGN;\n${HASH}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>\n${body}`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${GROUND_NORMAL}`);
   };
-  m.customProgramCacheKey = () => 'kta-road-4';
+}
+
+export function createRoadMaterial(tex: TextureSet) {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0.0 });
+  const base = groundShader(tex, ROAD, 'attribute vec4 aRoad;\nvarying vec4 vRoad;');
+  m.onBeforeCompile = (s) => {
+    base(s);
+    s.vertexShader = s.vertexShader.replace('vGN = vec3(0.0, 1.0, 0.0);', 'vGN = vec3(0.0, 1.0, 0.0);\nvRoad = aRoad;');
+    s.fragmentShader = s.fragmentShader.replace('varying vec3 vGN;', 'varying vec3 vGN;\nvarying vec4 vRoad;');
+  };
+  m.customProgramCacheKey = () => 'kta-road-tex-1';
   return m;
 }
 
-export function buildWorld(game: Game, memory: WebAssembly.Memory, scene: THREE.Scene, night: { value: number }): WorldStats {
-  const stats: WorldStats = { chunks: 0, buildings: 0, buildingTris: 0, roadTris: 0, gpuBytes: 0 };
-  const bmat = createBuildingMaterial(night);
+export function createGroundMaterial(tex: TextureSet) {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.92 });
+  m.onBeforeCompile = groundShader(
+    tex,
+    `vec2 guv = vGP.xz / 2.0;
+     vec3 gNt = texture(tGroundN, vec3(guv, 1.0)).xyz * 2.0 - 1.0;
+     diffuseColor.rgb = texture(tGroundA, vec3(guv, 1.0)).rgb * (0.88 + 0.2 * kN(vGP.xz * 0.08));`,
+    '',
+  );
+  m.customProgramCacheKey = () => 'kta-ground-tex-1';
+  return m;
+}
+
+export function buildWorld(game: Game, memory: WebAssembly.Memory, scene: THREE.Scene, night: { value: number }, tex: TextureSet, sky: SkyUniforms): WorldStats {
+  const stats: WorldStats = { chunks: 0, buildings: 0, buildingTris: 0, roadTris: 0, gpuBytes: 0, spill: null };
+  const bmat = createBuildingMaterial(night, tex, sky);
   const n = game.chunk_count();
   for (let i = 0; i < n; i++) {
     const d = game.chunk_desc(i);
@@ -274,7 +414,7 @@ export function buildWorld(game: Game, memory: WebAssembly.Memory, scene: THREE.
   rg.setIndex(new THREE.BufferAttribute(ridx, 1).onUpload(disposeArray));
   rg.computeBoundingSphere();
   (rg.getAttribute('position') as THREE.BufferAttribute).onUpload(disposeArray);
-  const roads = new THREE.Mesh(rg, createRoadMaterial());
+  const roads = new THREE.Mesh(rg, createRoadMaterial(tex));
   roads.receiveShadow = true;
   roads.matrixAutoUpdate = false;
   scene.add(roads);
@@ -327,29 +467,59 @@ export function buildWorld(game: Game, memory: WebAssembly.Memory, scene: THREE.
   scene.add(skirt);
   stats.gpuBytes += spos.byteLength + sk[3] + sk[5] * 4;
 
+  // Night light spill from shop fronts: multiply-add blending (dst * (1 + k))
+  // brightens the pavement in proportion to its own albedo, like real light.
+  const sp = game.spill_desc();
+  const pg = new THREE.BufferGeometry();
+  const ppos = new Float32Array(sb, sp[0], sp[1]).slice();
+  pg.setAttribute('position', new THREE.BufferAttribute(ppos, 3));
+  pg.setAttribute('aA', new THREE.BufferAttribute(new Uint8Array(sb, sp[2], sp[3]).slice(), 1, true).onUpload(disposeArray));
+  pg.setIndex(new THREE.BufferAttribute(new Uint32Array(sb, sp[4], sp[5]).slice(), 1).onUpload(disposeArray));
+  pg.computeBoundingSphere();
+  (pg.getAttribute('position') as THREE.BufferAttribute).onUpload(disposeArray);
+  const spill = new THREE.Mesh(
+    pg,
+    new THREE.ShaderMaterial({
+      vertexShader: /* glsl */ `
+        attribute float aA;
+        varying float vA;
+        varying vec3 vP;
+        void main() {
+          vA = aA;
+          vP = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: /* glsl */ `
+        uniform float uNight;
+        varying float vA;
+        varying vec3 vP;
+        float h(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+        void main() {
+          // Pools in front of individual shop bays rather than an even band.
+          float bay = h(floor(vP.xz / 3.2));
+          float k = vA * vA * uNight * (1.6 + 2.4 * bay);
+          gl_FragColor = vec4(k * vec3(1.0, 0.82, 0.62), 1.0);
+        }`,
+      uniforms: { uNight: night },
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.CustomBlending,
+      blendEquation: THREE.AddEquation,
+      blendSrc: THREE.DstColorFactor,
+      blendDst: THREE.OneFactor,
+    }),
+  );
+  spill.renderOrder = 2;
+  spill.matrixAutoUpdate = false;
+  spill.frustumCulled = true;
+  scene.add(spill);
+  stats.gpuBytes += ppos.byteLength + sp[3] + sp[5] * 4;
+  stats.spill = spill;
+
   game.free_meshes();
 
   // Ground.
-  const gmat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 });
-  gmat.onBeforeCompile = (s) => {
-    s.vertexShader = s.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec2 vGw;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGw = position.xz;');
-    s.fragmentShader = s.fragmentShader
-      .replace('#include <common>', `#include <common>\nvarying vec2 vGw;\n${HASH}`)
-      .replace(
-        '#include <color_fragment>',
-        `#include <color_fragment>
-        vec2 t = vec2(vGw.x / 0.4 + floor(vGw.y / 0.2) * 0.5, vGw.y / 0.2);
-        vec2 tw = fwidth(t);
-        float jo = max(kPulse(t.x, 0.92, 1.0, tw.x), kPulse(t.y, 0.88, 1.0, tw.y));
-        float far = smoothstep(0.3, 0.8, max(tw.x, tw.y));
-        float v = mix(kH2(floor(t)), 0.5, far);
-        vec3 base = mix(vec3(0.5, 0.49, 0.46), vec3(0.6, 0.57, 0.52), v) * (0.88 + 0.18 * kN(vGw * 0.15));
-        diffuseColor.rgb = mix(base, base * 0.7, jo);`,
-      );
-  };
-  gmat.customProgramCacheKey = () => 'kta-ground-1';
+  const gmat = createGroundMaterial(tex);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(3200, 3200).rotateX(-Math.PI / 2), gmat);
   ground.receiveShadow = true;
   ground.matrixAutoUpdate = false;

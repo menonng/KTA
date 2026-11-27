@@ -22,6 +22,8 @@ pub struct World {
     pub props: Props,
     /// Ground contact-shadow strips: positions, alpha, indices.
     pub skirt: (Vec<f32>, Vec<u8>, Vec<u32>),
+    /// Night light-spill strips in front of shop walls.
+    pub spill: (Vec<f32>, Vec<u8>, Vec<u32>),
 }
 
 impl World {
@@ -33,7 +35,8 @@ impl World {
         let crowd = Crowd::new(&map, crowd, seed);
         let props = Props::new(&map);
         let skirt = props::ao_skirts(&map);
-        Ok(World { map, chunks, roads, grid, player: Player::default(), crowd, props, skirt })
+        let spill = props::light_spill(&map);
+        Ok(World { map, chunks, roads, grid, player: Player::default(), crowd, props, skirt, spill })
     }
 
     /// Release generated mesh buffers once the renderer has uploaded them.
@@ -41,6 +44,7 @@ impl World {
         self.chunks = Vec::new();
         self.roads = RoadBuf::default();
         self.skirt = (Vec::new(), Vec::new(), Vec::new());
+        self.spill = (Vec::new(), Vec::new(), Vec::new());
     }
 
     pub fn spawn(&mut self, x: f32, z: f32) {
@@ -50,6 +54,12 @@ impl World {
         self.grid.resolve(&mut p, 0.32);
         self.player.state[0] = p[0];
         self.player.state[2] = p[1];
+    }
+
+    /// Fraction of the way from the camera target to the desired camera
+    /// position that is free of walls (1 = unobstructed).
+    pub fn camera_clear(&self, target: [f32; 3], cam: [f32; 3]) -> f32 {
+        self.grid.raycast(target, cam)
     }
 
     pub fn step(&mut self, dt: f32, bits: u32, fwd: [f32; 2]) {

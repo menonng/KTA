@@ -11,11 +11,14 @@ pub struct SegGrid {
     pub h: usize,
     pub cells: Vec<Vec<u32>>,
     pub segs: Vec<[P2; 2]>,
+    /// Wall height per segment (for the camera ray test).
+    pub heights: Vec<f32>,
 }
 
 impl SegGrid {
     pub fn new(m: &MapData, cell: f32) -> SegGrid {
         let mut segs = Vec::new();
+        let mut heights = Vec::new();
         let mut mn = [f32::MAX, f32::MAX];
         let mut mx = [f32::MIN, f32::MIN];
         for b in &m.buildings {
@@ -24,6 +27,7 @@ impl SegGrid {
                 let a = b.pts[i];
                 let c = b.pts[(i + 1) % n];
                 segs.push([a, c]);
+                heights.push(b.height + if b.height > 5.0 { 0.9 } else { 0.0 });
                 for p in [a, c] {
                     mn[0] = mn[0].min(p[0]);
                     mn[1] = mn[1].min(p[1]);
@@ -50,7 +54,42 @@ impl SegGrid {
                 }
             }
         }
-        SegGrid { min: mn, cell, w, h, cells, segs }
+        SegGrid { min: mn, cell, w, h, cells, segs, heights }
+    }
+
+    /// First wall hit along the 3D segment a -> b (x, y, z), as a fraction of
+    /// its length in [0, 1] (1 = clear). Used to keep the camera out of walls.
+    pub fn raycast(&self, a: [f32; 3], b: [f32; 3]) -> f32 {
+        let (x0, x1) = (a[0].min(b[0]), a[0].max(b[0]));
+        let (z0, z1) = (a[2].min(b[2]), a[2].max(b[2]));
+        let cx0 = (((x0 - self.min[0]) / self.cell).floor() as i64).max(0);
+        let cx1 = (((x1 - self.min[0]) / self.cell).floor() as i64).min(self.w as i64 - 1);
+        let cz0 = (((z0 - self.min[1]) / self.cell).floor() as i64).max(0);
+        let cz1 = (((z1 - self.min[1]) / self.cell).floor() as i64).min(self.h as i64 - 1);
+        let d = [b[0] - a[0], b[2] - a[2]];
+        let mut best = 1.0f32;
+        for z in cz0..=cz1 {
+            for x in cx0..=cx1 {
+                for &si in &self.cells[z as usize * self.w + x as usize] {
+                    let s = self.segs[si as usize];
+                    let e = [s[1][0] - s[0][0], s[1][1] - s[0][1]];
+                    let den = d[0] * e[1] - d[1] * e[0];
+                    if den.abs() < 1e-8 {
+                        continue;
+                    }
+                    let w = [s[0][0] - a[0], s[0][1] - a[2]];
+                    let t = (w[0] * e[1] - w[1] * e[0]) / den;
+                    let u = (w[0] * d[1] - w[1] * d[0]) / den;
+                    if t >= 0.0 && t < best && (0.0..=1.0).contains(&u) {
+                        let y = a[1] + (b[1] - a[1]) * t;
+                        if y < self.heights[si as usize] {
+                            best = t;
+                        }
+                    }
+                }
+            }
+        }
+        best
     }
 
     /// Push a circle out of nearby wall segments.
@@ -271,5 +310,23 @@ impl Crowd {
             self.out[o + 2] = yaw;
             self.out[o + 3] = a.phase;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::Building;
+
+    #[test]
+    fn camera_ray_hits_wall_below_roof_only() {
+        let pts = vec![[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
+        let m = MapData { buildings: vec![Building { pts, height: 9.0, levels: 3, kind: 2, seed: 1, ..Default::default() }], ..Default::default() };
+        let g = SegGrid::new(&m, 12.0);
+        // From x = -5 towards x = 5 at head height: hits the wall at x = 0 (t = 0.5).
+        let t = g.raycast([-5.0, 1.5, 5.0], [5.0, 1.5, 5.0]);
+        assert!((t - 0.5).abs() < 1e-4, "{t}");
+        // Above the parapet: clear.
+        assert_eq!(g.raycast([-5.0, 12.0, 5.0], [5.0, 12.0, 5.0]), 1.0);
     }
 }

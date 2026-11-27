@@ -7,7 +7,8 @@ const path = require('path');
   const page = await browser.newPage({ viewport: { width: 960, height: 540 } });
   await page.goto('http://localhost:4173/?time=14', { waitUntil: 'load' });
   await page.waitForFunction(() => window.__kta);
-  const spots = ['CUZ', '포차', '스타덕스', '세탁'];
+  await page.evaluate(() => window.__kta.signsReady);
+  const spots = (process.env.SPOTS || 'CUZ,포차,스타덕스,헤어').split(',');
   for (const [i, text] of spots.entries()) {
     const s = await page.evaluate((t) => window.__kta.findSign(t), text);
     if (!s) { console.log('missing', text); continue; }

@@ -67,7 +67,7 @@ export class Environment {
     vignette: 0.35,
     bloom: 0.3,
   };
-  private uniforms: Record<string, THREE.IUniform>;
+  readonly uniforms: Record<string, THREE.IUniform>;
   private sunDir = new THREE.Vector3();
 
   constructor(private scene: THREE.Scene, private renderer: THREE.WebGLRenderer) {
@@ -138,8 +138,8 @@ export class Environment {
     this.sun.intensity = THREE.MathUtils.lerp(THREE.MathUtils.lerp(3.1, 2.1, gold), 0.12, night);
     // Neutral, slightly warm fill: GTA-style shadows read warm-gray, not blue.
     this.hemi.color.copy(top).lerp(new THREE.Color(1.0, 0.97, 0.92), 0.72);
-    this.hemi.groundColor.set(0x6a5f52).lerp(new THREE.Color(0x15151a), night);
-    this.hemi.intensity = THREE.MathUtils.lerp(0.95, 0.42, night);
+    this.hemi.groundColor.set(0x8a7e70).lerp(new THREE.Color(0x2a2620), night);
+    this.hemi.intensity = THREE.MathUtils.lerp(1.55, 0.62, night);
     this.fog.color.copy(hor);
     this.fog.near = THREE.MathUtils.lerp(140, 60, night);
     this.fog.far = THREE.MathUtils.lerp(850, 420, night);
@@ -152,7 +152,7 @@ export class Environment {
     g.contrast = L(1.08, 1.12, night);
     g.saturation = L(L(1.06, 1.15, gold), 1.18, night);
     g.vignette = L(0.32, 0.45, night);
-    g.bloom = L(L(0.18, 0.3, gold), 0.95, night);
+    g.bloom = L(L(0.18, 0.3, gold), 0.72, night);
   }
 
   /** Keep the shadow frustum around the player. */

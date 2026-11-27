@@ -32,6 +32,20 @@ export class Game {
         return ret >>> 0;
     }
     /**
+     * Camera collision: free fraction of target -> camera (1 = clear).
+     * @param {number} tx
+     * @param {number} ty
+     * @param {number} tz
+     * @param {number} cx
+     * @param {number} cy
+     * @param {number} cz
+     * @returns {number}
+     */
+    camera_clear(tx, ty, tz, cx, cy, cz) {
+        const ret = wasm.game_camera_clear(this.__wbg_ptr, tx, ty, tz, cx, cy, cz);
+        return ret;
+    }
+    /**
      * @param {number} i
      * @returns {Float32Array}
      */
@@ -206,6 +220,16 @@ export class Game {
      */
     spawn(x, z) {
         wasm.game_spawn(this.__wbg_ptr, x, z);
+    }
+    /**
+     * [pos_ptr, pos_len, alpha_ptr, alpha_len, idx_ptr, idx_len] for night light spill.
+     * @returns {Uint32Array}
+     */
+    spill_desc() {
+        const ret = wasm.game_spill_desc(this.__wbg_ptr);
+        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
     }
     /**
      * @param {number} dt

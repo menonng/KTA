@@ -794,6 +794,43 @@ impl Props {
 }
 
 /// Soft contact shadow strips on the ground along building walls.
+/// Night light spill from shop fronts onto the pavement: wide strips along
+/// non-residential walls, drawn with multiply-add blending (albedo aware).
+pub fn light_spill(m: &MapData) -> (Vec<f32>, Vec<u8>, Vec<u32>) {
+    let mut pos = Vec::new();
+    let mut alpha = Vec::new();
+    let mut idx = Vec::new();
+    for b in &m.buildings {
+        if b.kind == crate::data::kind::RESIDENTIAL {
+            continue;
+        }
+        let n = b.pts.len();
+        for e in 0..n {
+            let a = b.pts[e];
+            let c = b.pts[(e + 1) % n];
+            let d = [c[0] - a[0], c[1] - a[1]];
+            let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+            if len < 2.0 {
+                continue;
+            }
+            let nrm = [d[1] / len, -d[0] / len];
+            let dir = [d[0] / len, d[1] / len];
+            let w = 4.2;
+            // Inset the ends so neighbouring strips do not double up at corners.
+            let a2 = [a[0] + dir[0] * 0.4, a[1] + dir[1] * 0.4];
+            let c2 = [c[0] - dir[0] * 0.4, c[1] - dir[1] * 0.4];
+            let base = (pos.len() / 3) as u32;
+            let y = 0.104;
+            for (p, al) in [(a2, 255u8), (c2, 255u8), ([c2[0] + nrm[0] * w, c2[1] + nrm[1] * w], 0u8), ([a2[0] + nrm[0] * w, a2[1] + nrm[1] * w], 0u8)] {
+                pos.extend_from_slice(&[p[0], y, p[1]]);
+                alpha.push(al);
+            }
+            idx.extend_from_slice(&[base, base + 2, base + 3, base, base + 1, base + 2]);
+        }
+    }
+    (pos, alpha, idx)
+}
+
 pub fn ao_skirts(m: &MapData) -> (Vec<f32>, Vec<u8>, Vec<u32>) {
     let mut pos = Vec::new();
     let mut alpha = Vec::new();
