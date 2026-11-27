@@ -4,10 +4,12 @@
 pub mod data;
 pub mod geom;
 pub mod mesh;
+pub mod props;
 pub mod sim;
 
 use data::MapData;
 use mesh::{MeshBuf, RoadBuf};
+use props::Props;
 use sim::{Crowd, Player, SegGrid};
 
 pub struct World {
@@ -17,6 +19,9 @@ pub struct World {
     pub grid: SegGrid,
     pub player: Player,
     pub crowd: Crowd,
+    pub props: Props,
+    /// Ground contact-shadow strips: positions, alpha, indices.
+    pub skirt: (Vec<f32>, Vec<u8>, Vec<u32>),
 }
 
 impl World {
@@ -26,13 +31,16 @@ impl World {
         let roads = mesh::build_roads(&map);
         let grid = SegGrid::new(&map, 12.0);
         let crowd = Crowd::new(&map, crowd, seed);
-        Ok(World { map, chunks, roads, grid, player: Player::default(), crowd })
+        let props = Props::new(&map);
+        let skirt = props::ao_skirts(&map);
+        Ok(World { map, chunks, roads, grid, player: Player::default(), crowd, props, skirt })
     }
 
     /// Release generated mesh buffers once the renderer has uploaded them.
     pub fn free_meshes(&mut self) {
         self.chunks = Vec::new();
         self.roads = RoadBuf::default();
+        self.skirt = (Vec::new(), Vec::new(), Vec::new());
     }
 
     pub fn spawn(&mut self, x: f32, z: f32) {

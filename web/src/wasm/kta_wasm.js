@@ -12,6 +12,19 @@ export class Game {
         wasm.__wbg_game_free(ptr, 0);
     }
     /**
+     * Build one prop cell into the reused scratch mesh.
+     * Returns [pos_ptr, pos_len, nrm_ptr, nrm_len, col_ptr, col_len, idx_ptr, idx_len].
+     * @param {number} cx
+     * @param {number} cz
+     * @returns {Uint32Array}
+     */
+    build_prop_cell(cx, cz) {
+        const ret = wasm.game_build_prop_cell(this.__wbg_ptr, cx, cz);
+        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * @returns {number}
      */
     building_count() {
@@ -47,6 +60,16 @@ export class Game {
         return v1;
     }
     /**
+     * Crosswalks: x, z, yaw, width, length.
+     * @returns {Float32Array}
+     */
+    crosswalks() {
+        const ret = wasm.game_crosswalks(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * @returns {number}
      */
     crowd_count() {
@@ -73,6 +96,16 @@ export class Game {
     }
     free_meshes() {
         wasm.game_free_meshes(this.__wbg_ptr);
+    }
+    /**
+     * Street lamp light pools: x, z.
+     * @returns {Float32Array}
+     */
+    lamps() {
+        const ret = wasm.game_lamps(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
     }
     /**
      * Footprints for the minimap: n, x0, z0, x1, z1, ... per building.
@@ -121,6 +154,23 @@ export class Game {
         return ret >>> 0;
     }
     /**
+     * Prop cells: flattened (cx, cz, primitive count). Cell size is 128 m.
+     * @returns {Int32Array}
+     */
+    prop_cells() {
+        const ret = wasm.game_prop_cells(this.__wbg_ptr);
+        var v1 = getArrayI32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * @returns {number}
+     */
+    prop_count() {
+        const ret = wasm.game_prop_count(this.__wbg_ptr);
+        return ret >>> 0;
+    }
+    /**
      * [pos_ptr, pos_len, attr_ptr, attr_len, idx_ptr, idx_len]
      * @returns {Uint32Array}
      */
@@ -141,6 +191,16 @@ export class Game {
         return v1;
     }
     /**
+     * [pos_ptr, pos_len, alpha_ptr, alpha_len, idx_ptr, idx_len] for ground contact shadows.
+     * @returns {Uint32Array}
+     */
+    skirt_desc() {
+        const ret = wasm.game_skirt_desc(this.__wbg_ptr);
+        var v1 = getArrayU32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * @param {number} x
      * @param {number} z
      */
@@ -155,6 +215,16 @@ export class Game {
      */
     step(dt, bits, fx, fz) {
         wasm.game_step(this.__wbg_ptr, dt, bits, fx, fz);
+    }
+    /**
+     * Wire line segments: x0, y0, z0, x1, y1, z1, ...
+     * @returns {Float32Array}
+     */
+    wires() {
+        const ret = wasm.game_wires(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
     }
 }
 if (Symbol.dispose) Game.prototype[Symbol.dispose] = Game.prototype.free;
@@ -192,6 +262,11 @@ function getArrayF32FromWasm0(ptr, len) {
     return getFloat32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
 }
 
+function getArrayI32FromWasm0(ptr, len) {
+    ptr = ptr >>> 0;
+    return getInt32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
+}
+
 function getArrayU32FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint32ArrayMemory0().subarray(ptr / 4, ptr / 4 + len);
@@ -203,6 +278,14 @@ function getFloat32ArrayMemory0() {
         cachedFloat32ArrayMemory0 = new Float32Array(wasm.memory.buffer);
     }
     return cachedFloat32ArrayMemory0;
+}
+
+let cachedInt32ArrayMemory0 = null;
+function getInt32ArrayMemory0() {
+    if (cachedInt32ArrayMemory0 === null || cachedInt32ArrayMemory0.byteLength === 0) {
+        cachedInt32ArrayMemory0 = new Int32Array(wasm.memory.buffer);
+    }
+    return cachedInt32ArrayMemory0;
 }
 
 function getStringFromWasm0(ptr, len) {
@@ -261,6 +344,7 @@ function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     wasmModule = module;
     cachedFloat32ArrayMemory0 = null;
+    cachedInt32ArrayMemory0 = null;
     cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();

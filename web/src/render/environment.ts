@@ -2,6 +2,7 @@
 // Everything is procedural: no textures, one draw call for the sky.
 
 import * as THREE from 'three';
+import type { Grade } from './post';
 
 const skyVert = /* glsl */ `
 varying vec3 vDir;
@@ -45,7 +46,7 @@ const PAL = {
   nightHorizon: c(0.06, 0.07, 0.14),
   sunDay: c(1.0, 0.95, 0.86),
   sunGold: c(1.0, 0.62, 0.38),
-  moon: c(0.55, 0.65, 1.0),
+  moon: c(0.62, 0.68, 0.85),
 };
 
 export class Environment {
@@ -55,6 +56,17 @@ export class Environment {
   readonly fog: THREE.Fog;
   /** 0 = day, 1 = night. Shared with materials. */
   readonly night = { value: 0 };
+  /** Color grading for the post chain (GTA-like warm days, neon nights). */
+  readonly grade: Grade = {
+    exposure: 1,
+    tint: new THREE.Color(1, 1, 1),
+    shadow: new THREE.Color(1, 1, 1),
+    high: new THREE.Color(1, 1, 1),
+    contrast: 1,
+    saturation: 1,
+    vignette: 0.35,
+    bloom: 0.3,
+  };
   private uniforms: Record<string, THREE.IUniform>;
   private sunDir = new THREE.Vector3();
 
@@ -123,14 +135,24 @@ export class Environment {
     (this.uniforms.uSunColor.value as THREE.Color).copy(sunC);
 
     this.sun.color.copy(sunC);
-    this.sun.intensity = THREE.MathUtils.lerp(THREE.MathUtils.lerp(2.6, 1.7, gold), 0.18, night);
-    this.hemi.color.copy(top).lerp(new THREE.Color(1, 1, 1), 0.35);
-    this.hemi.groundColor.set(0x3a3a38).lerp(new THREE.Color(0x101014), night);
-    this.hemi.intensity = THREE.MathUtils.lerp(1.15, 0.5, night);
+    this.sun.intensity = THREE.MathUtils.lerp(THREE.MathUtils.lerp(3.1, 2.1, gold), 0.12, night);
+    // Neutral, slightly warm fill: GTA-style shadows read warm-gray, not blue.
+    this.hemi.color.copy(top).lerp(new THREE.Color(1.0, 0.97, 0.92), 0.72);
+    this.hemi.groundColor.set(0x6a5f52).lerp(new THREE.Color(0x15151a), night);
+    this.hemi.intensity = THREE.MathUtils.lerp(0.95, 0.42, night);
     this.fog.color.copy(hor);
     this.fog.near = THREE.MathUtils.lerp(140, 60, night);
     this.fog.far = THREE.MathUtils.lerp(850, 420, night);
-    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.0, 1.1, night);
+    const L = THREE.MathUtils.lerp;
+    const g = this.grade;
+    g.exposure = L(L(1.0, 1.05, gold), 1.25, night);
+    g.tint.setRGB(L(L(1.03, 1.1, gold), 1.0, night), L(L(1.0, 0.97, gold), 0.98, night), L(L(0.95, 0.84, gold), 1.04, night));
+    g.shadow.setRGB(L(0.97, 0.88, night), L(0.99, 0.96, night), L(1.03, 1.12, night));
+    g.high.setRGB(L(L(1.06, 1.14, gold), 1.12, night), L(L(1.0, 0.98, gold), 1.0, night), L(L(0.9, 0.8, gold), 0.86, night));
+    g.contrast = L(1.08, 1.12, night);
+    g.saturation = L(L(1.06, 1.15, gold), 1.18, night);
+    g.vignette = L(0.32, 0.45, night);
+    g.bloom = L(L(0.18, 0.3, gold), 0.95, night);
   }
 
   /** Keep the shadow frustum around the player. */

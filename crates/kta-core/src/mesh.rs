@@ -82,7 +82,7 @@ pub fn build_chunks(m: &MapData, cell: f32) -> Vec<MeshBuf> {
         let h = b.height.max(3.0);
         let c = crate::geom::centroid(p);
         let key = ((c[0] / cell).floor() as i32, (c[1] / cell).floor() as i32);
-        let need = n * 4 + n;
+        let need = n * 12 + n;
         let list = map.entry(key).or_default();
         if list.last().map_or(true, |mb| mb.vcount() + need > 65000) {
             list.push(MeshBuf::default());
@@ -114,6 +114,22 @@ pub fn build_chunks(m: &MapData, cell: f32) -> Vec<MeshBuf> {
             let t1 = mb.push([bb[0], h, bb[1]], nn, [u1, hv, seed, kf_wall]);
             let b1 = mb.push([bb[0], 0.0, bb[1]], nn, [u1, 0, seed, kf_wall]);
             mb.idx.extend_from_slice(&[b0, t0, t1, b0, t1, b1]);
+            // Roof parapet (난간벽): outer face continues the wall, inner face looks onto the roof.
+            if h > 5.0 {
+                let hp = h + 0.9;
+                let hv2 = cm(hp);
+                let o0 = mb.push([a[0], h, a[1]], nn, [u0, hv, seed, kf_wall]);
+                let o1 = mb.push([a[0], hp, a[1]], nn, [u0, hv2, seed, kf_wall]);
+                let o2 = mb.push([bb[0], hp, bb[1]], nn, [u1, hv2, seed, kf_wall]);
+                let o3 = mb.push([bb[0], h, bb[1]], nn, [u1, hv, seed, kf_wall]);
+                mb.idx.extend_from_slice(&[o0, o1, o2, o0, o2, o3]);
+                let ni = [-nn[0], 0, -nn[2]];
+                let i0 = mb.push([a[0], h, a[1]], ni, [u0, hv, seed, kf_wall]);
+                let i1 = mb.push([a[0], hp, a[1]], ni, [u0, hv2, seed, kf_wall]);
+                let i2 = mb.push([bb[0], hp, bb[1]], ni, [u1, hv2, seed, kf_wall]);
+                let i3 = mb.push([bb[0], h, bb[1]], ni, [u1, hv, seed, kf_wall]);
+                mb.idx.extend_from_slice(&[i0, i2, i1, i0, i3, i2]);
+            }
             u += len;
         }
 
@@ -270,8 +286,8 @@ mod tests {
         let ch = build_chunks(&m, 100.0);
         assert_eq!(ch.len(), 1);
         let mb = &ch[0];
-        assert_eq!(mb.vcount(), 4 * 4 + 4);
-        assert_eq!(mb.idx.len(), 4 * 6 + 2 * 3);
+        assert_eq!(mb.vcount(), 4 * 12 + 4);
+        assert_eq!(mb.idx.len(), 4 * 18 + 2 * 3);
         // Check every triangle's geometric normal agrees with its vertex normal.
         for t in mb.idx.chunks(3) {
             let v = |i: u16| {

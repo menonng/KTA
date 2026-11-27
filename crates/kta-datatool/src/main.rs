@@ -545,7 +545,7 @@ fn main() {
                 vertical: true,
             });
         } else {
-            let mut w = (units * 0.62 + 0.9).clamp(1.8, 9.0);
+            let mut w = (units * 0.8 + 1.4).max(len * 0.7).clamp(2.4, 10.0);
             if w > len - 0.3 {
                 w = len - 0.3;
             }
@@ -554,12 +554,12 @@ fn main() {
                 continue;
             }
             let s = sclamp(tt * len, w * 0.5 + 0.15, len - w * 0.5 - 0.15);
-            let hgt = 0.9;
+            let hgt = 1.15;
             let occ = occupancy.entry((bi, ei)).or_default();
             let mut floor = start_floor;
             let mut placed = false;
             while floor < 12 {
-                let y = 3.15 + floor as f32 * 3.3 + hgt * 0.5;
+                let y = if floor == 0 { 3.55 } else { floor as f32 * 3.3 + 1.7 };
                 if y + hgt * 0.5 > b.height - 0.2 {
                     break;
                 }
@@ -568,12 +568,12 @@ fn main() {
                 if !occ.iter().any(|&(o0, o1, f)| f == floor && s0 < o1 + 0.2 && s1 > o0 - 0.2) {
                     occ.push((s0, s1, floor));
                     signs.push(Sign {
-                        x: a[0] + dir[0] * s + nrm[0] * 0.07,
-                        z: a[1] + dir[1] * s + nrm[1] * 0.07,
+                        x: a[0] + dir[0] * s + nrm[0] * 0.25,
+                        z: a[1] + dir[1] * s + nrm[1] * 0.25,
                         y,
                         yaw: nrm[0].atan2(nrm[1]),
                         w,
-                        h: hgt,
+                        h: if floor == 0 { hgt } else { 0.95 },
                         label: li,
                         vertical: false,
                     });
@@ -593,6 +593,164 @@ fn main() {
             generic_count += 1;
         }
     }
+
+
+    // ---- Streetscape density pass (generic names only; brands via billboards) ----
+    let upper: [&str; 18] = ["노래연습장", "PC방", "호프", "당구장", "BAR", "헤어", "네일", "필라테스", "영어학원", "치과", "부동산", "오락실", "룸카페", "보드게임", "스튜디오", "만화카페", "코인노래방", "방탈출"];
+    let vert: [&str; 10] = ["노래방", "PC방", "호프", "당구장", "BAR", "CLUB", "룸카페", "오락실", "포차", "맛집"];
+    let ads: [(&str, &str, &str); 12] = [
+        ("기가커피", "#3A2416", "#FFD400"), ("라떼", "#FFFFFF", "#DA291C"), ("심송", "#FFFFFF", "#1428A0"),
+        ("CUZ", "#FFFFFF", "#652F8D"), ("스타덕스", "#FFFFFF", "#00704A"), ("농담식품 매운라면", "#FFFFFF", "#C8102E"),
+        ("참아슬", "#FFFFFF", "#0B6E4F"), ("다음처럼", "#FFFFFF", "#1D4E9E"), ("올리브올드", "#FFFFFF", "#8DC63F"),
+        ("꾸팡", "#FFFFFF", "#E8501E"), ("배달의겨레", "#FFFFFF", "#2AC1BC"), ("코코아T", "#1A1A1A", "#FFE000"),
+    ];
+    let window_style: [(&str, &str); 3] = [("#1A2026", "#FFD400"), ("#1A2026", "#FFFFFF"), ("#10161C", "#FF6FA8")];
+    fn lab(labels: &mut Vec<Label>, ix: &mut HashMap<(String, &'static str, &'static str), u16>, t: &str, fg: &'static str, bg: &'static str, brand: bool) -> u16 {
+        *ix.entry((t.to_string(), fg, bg)).or_insert_with(|| {
+            labels.push(Label { text: t.to_string(), fg, bg, brand });
+            (labels.len() - 1) as u16
+        })
+    }
+    let road_dist = |p: P2| -> (f32, u8) {
+        let mut best = (f32::MAX, 0u8);
+        for r in &roads {
+            for sgm in r.pts.windows(2) {
+                let (c, _) = closest_on_segment(p, sgm[0], sgm[1]);
+                let d = kta_core::geom::dist2(p, c).sqrt() - r.width * 0.5;
+                if d < best.0 {
+                    best = (d, r.kind & !data::ONEWAY);
+                }
+            }
+        }
+        best
+    };
+    let mut signed_edges: Vec<(usize, usize)> = occupancy.keys().copied().collect();
+    signed_edges.sort();
+    let mut extra_n = 0usize;
+    let mut done_bld: HashMap<usize, ()> = HashMap::new();
+    for &(bi, ei) in &signed_edges {
+        if done_bld.contains_key(&bi) {
+            continue;
+        }
+        done_bld.insert(bi, ());
+        let b = &buildings[bi];
+        let lv = b.levels as u32;
+        if lv < 3 {
+            continue;
+        }
+        let n = b.pts.len();
+        let (a, c) = (b.pts[ei], b.pts[(ei + 1) % n]);
+        let d = [c[0] - a[0], c[1] - a[1]];
+        let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        if len < 3.0 {
+            continue;
+        }
+        let dir = [d[0] / len, d[1] / len];
+        let nrm = [dir[1], -dir[0]];
+        let mut h = hash(bi as u64 * 31 + 7);
+        let mut rnd = || {
+            h = hash(h);
+            (h % 10_000) as f32 / 10_000.0
+        };
+        // Upper-floor horizontal signs (some styled as window lettering).
+        let k = 1 + (rnd() * (lv.min(4) - 1) as f32) as u32;
+        for _ in 0..k {
+            let floor = 1 + (rnd() * (lv - 1) as f32) as u32;
+            let txt = upper[(rnd() * upper.len() as f32) as usize % upper.len()];
+            let (bg, fg) = if rnd() < 0.45 {
+                window_style[(rnd() * 3.0) as usize % 3]
+            } else {
+                GENERIC_PALETTE[(rnd() * GENERIC_PALETTE.len() as f32) as usize % GENERIC_PALETTE.len()]
+            };
+            let w = (char_units(txt) * 0.7 + 1.2).max(len * 0.5).min(len - 0.4).min(9.0);
+            if w < 1.5 {
+                continue;
+            }
+            let s = sclamp(rnd() * len, w * 0.5 + 0.2, len - w * 0.5 - 0.2);
+            let y = floor as f32 * 3.3 + 1.7;
+            if y + 0.6 > b.height {
+                continue;
+            }
+            let occ = occupancy.entry((bi, ei)).or_default();
+            if occ.iter().any(|&(o0, o1, f)| f == floor && s - w * 0.5 < o1 + 0.2 && s + w * 0.5 > o0 - 0.2) {
+                continue;
+            }
+            occ.push((s - w * 0.5, s + w * 0.5, floor));
+            let li = lab(&mut labels, &mut label_ix, txt, fg, bg, false);
+            signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.25, z: a[1] + dir[1] * s + nrm[1] * 0.25, y, yaw: nrm[0].atan2(nrm[1]), w, h: 0.95, label: li, vertical: false });
+            extra_n += 1;
+        }
+        // Vertical LED sign stack at an edge end.
+        if lv >= 4 && rnd() < 0.55 {
+            let s = if rnd() < 0.5 { 0.7 } else { len - 0.7 };
+            let mut y0 = 3.9;
+            for _ in 0..(1 + (rnd() < 0.5) as u32) {
+                let txt = vert[(rnd() * vert.len() as f32) as usize % vert.len()];
+                let hh = (char_units(txt) * 0.62 + 0.6).min(5.0);
+                if y0 + hh > b.height - 0.3 {
+                    break;
+                }
+                let (bg, fg) = GENERIC_PALETTE[(rnd() * GENERIC_PALETTE.len() as f32) as usize % GENERIC_PALETTE.len()];
+                let li = lab(&mut labels, &mut label_ix, txt, fg, bg, false);
+                signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.6, z: a[1] + dir[1] * s + nrm[1] * 0.6, y: y0 + hh * 0.5, yaw: dir[0].atan2(dir[1]), w: 0.72, h: hh, label: li, vertical: true });
+                y0 += hh + 0.25;
+                extra_n += 1;
+            }
+        }
+    }
+    // Rooftop billboards on taller buildings along major roads.
+    let mut cand: Vec<(f32, usize, usize)> = Vec::new();
+    for (bi, b) in buildings.iter().enumerate() {
+        if b.height < 16.0 {
+            continue;
+        }
+        let n = b.pts.len();
+        for ei in 0..n {
+            let (a, c) = (b.pts[ei], b.pts[(ei + 1) % n]);
+            let d = [c[0] - a[0], c[1] - a[1]];
+            let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+            if len < 7.0 {
+                continue;
+            }
+            let nrm = [d[1] / len, -d[0] / len];
+            let mid = [a[0] + d[0] * 0.5 + nrm[0] * 4.0, a[1] + d[1] * 0.5 + nrm[1] * 4.0];
+            let (dist, rk) = road_dist(mid);
+            if dist < 5.0 && matches!(rk, road::PRIMARY | road::SECONDARY) {
+                cand.push((b.height + len * 0.1, bi, ei));
+            }
+        }
+    }
+    cand.sort_by(|x, y| y.0.partial_cmp(&x.0).unwrap());
+    let mut used: HashMap<usize, ()> = HashMap::new();
+    let mut boards = 0usize;
+    for &(_, bi, ei) in &cand {
+        if boards >= 14 || used.contains_key(&bi) {
+            continue;
+        }
+        used.insert(bi, ());
+        let b = &buildings[bi];
+        let n = b.pts.len();
+        let (a, c) = (b.pts[ei], b.pts[(ei + 1) % n]);
+        let d = [c[0] - a[0], c[1] - a[1]];
+        let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        let nrm = [d[1] / len, -d[0] / len];
+        let (txt, fg, bg) = ads[boards % ads.len()];
+        let li = lab(&mut labels, &mut label_ix, txt, fg, bg, true);
+        let w = (len * 0.8).min(13.0);
+        let hh = 3.2;
+        signs.push(Sign {
+            x: a[0] + d[0] * 0.5 - nrm[0] * 0.4,
+            z: a[1] + d[1] * 0.5 - nrm[1] * 0.4,
+            y: b.height + 1.4 + hh * 0.5,
+            yaw: nrm[0].atan2(nrm[1]),
+            w,
+            h: hh,
+            label: li,
+            vertical: false,
+        });
+        boards += 1;
+    }
+    eprintln!("density pass: +{} signs, {} rooftop billboards", extra_n, boards);
 
     let map = MapData { origin_lat: lat0, origin_lon: lon0, buildings, roads, entrances, signs };
     let bin = data::write(&map);

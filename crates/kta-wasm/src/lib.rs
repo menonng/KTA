@@ -120,4 +120,42 @@ impl Game {
     pub fn crowd_count(&self) -> u32 {
         self.w.crowd.len() as u32
     }
+
+    /// Prop cells: flattened (cx, cz, primitive count). Cell size is 128 m.
+    pub fn prop_cells(&self) -> Vec<i32> {
+        self.w.props.cell_list()
+    }
+
+    pub fn prop_count(&self) -> u32 {
+        self.w.props.prim_count as u32
+    }
+
+    /// Build one prop cell into the reused scratch mesh.
+    /// Returns [pos_ptr, pos_len, nrm_ptr, nrm_len, col_ptr, col_len, idx_ptr, idx_len].
+    pub fn build_prop_cell(&mut self, cx: i32, cz: i32) -> Vec<u32> {
+        self.w.props.build_cell(cx, cz);
+        let m = &self.w.props.scratch;
+        vec![ptr(&m.pos), m.pos.len() as u32, ptr(&m.nrm), m.nrm.len() as u32, ptr(&m.col), m.col.len() as u32, ptr(&m.idx), m.idx.len() as u32]
+    }
+
+    /// Wire line segments: x0, y0, z0, x1, y1, z1, ...
+    pub fn wires(&self) -> Vec<f32> {
+        self.w.props.wires.clone()
+    }
+
+    /// Crosswalks: x, z, yaw, width, length.
+    pub fn crosswalks(&self) -> Vec<f32> {
+        self.w.props.crosswalks.clone()
+    }
+
+    /// Street lamp light pools: x, z.
+    pub fn lamps(&self) -> Vec<f32> {
+        self.w.props.lamps.clone()
+    }
+
+    /// [pos_ptr, pos_len, alpha_ptr, alpha_len, idx_ptr, idx_len] for ground contact shadows.
+    pub fn skirt_desc(&self) -> Vec<u32> {
+        let s = &self.w.skirt;
+        vec![ptr(&s.0), s.0.len() as u32, ptr(&s.1), s.1.len() as u32, ptr(&s.2), s.2.len() as u32]
+    }
 }

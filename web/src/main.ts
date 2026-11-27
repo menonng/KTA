@@ -9,6 +9,8 @@ import { buildEntrances, buildWorld } from './render/world';
 import { buildSigns, type LabelDef, type SignInst } from './render/signs';
 import { Crowd, Protagonist } from './render/characters';
 import { Hud } from './hud/hud';
+import { Post } from './render/post';
+import { PropStreamer, buildStreetDetails } from './render/props';
 
 const params = new URLSearchParams(location.search);
 const BENCH = params.has('bench');
@@ -33,13 +35,14 @@ async function boot() {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, stencil: false, powerPreference: 'default' });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1) * SCALE);
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMapping = THREE.NoToneMapping; // tone mapping + grading happen in Post
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = true;
+  renderer.info.autoReset = false; // several passes per frame; reset manually
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.3, 1600);
+  const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.3, 1600);
   const env = new Environment(scene, renderer);
 
   const world = buildWorld(game, memory, scene, env.night);
@@ -61,10 +64,16 @@ async function boot() {
     signs.push({ x: e.x - fx * 2.33, y: 3.2, z: e.z - fz * 2.33, yaw: e.yaw + Math.PI, w: 1.9, h: 0.6, label: li, vertical: false });
   }
   const signLayer = buildSigns(labels, signs, env.night);
-  scene.add(signLayer.mesh);
+  scene.add(signLayer.mesh, signLayer.boxes);
+  const street = buildStreetDetails(game, scene, env.night);
+  const props = new PropStreamer(game, memory, scene, env.night);
+  const post = new Post(renderer);
 
   const player = new Protagonist();
   scene.add(player.root);
+  // Cinematic fill light around the player at night (one dynamic light, plan 4.8).
+  const fill = new THREE.PointLight(0xffd9a8, 0, 14, 1.6);
+  scene.add(fill);
   const crowd = new Crowd(game.crowd_count());
   scene.add(crowd.group);
 
@@ -76,6 +85,12 @@ async function boot() {
 
   const input = new Input(canvas);
   input.yaw = spawnAt.yaw + Math.PI * 0.5;
+  input.pitch = 0.16;
+  input.dist = 5.2;
+  {
+    const sp = new Float32Array(memory.buffer, game.player_ptr(), 6);
+    props.update(sp[0], sp[2], 0, true);
+  }
   input.enabled = !BENCH;
 
   let hours = Number(params.get('time') ?? 18.6);
@@ -94,6 +109,8 @@ async function boot() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    const ds = renderer.getDrawingBufferSize(new THREE.Vector2());
+    post.setSize(ds.x, ds.y);
   });
 
   const playerView = () => new Float32Array(memory.buffer, game.player_ptr(), 6);
@@ -114,7 +131,10 @@ async function boot() {
 
   const api = {
     setTime: (h: number) => (hours = h),
-    teleport: (x: number, z: number) => game.spawn(x, z),
+    teleport: (x: number, z: number) => {
+      game.spawn(x, z);
+      props.update(x, z, 0, true);
+    },
     setView: (yaw: number, pitch: number, dist: number) => Object.assign(input, { yaw, pitch, dist }),
     stats: () => collectStats(),
     findSign: (text: string) => {
@@ -141,7 +161,14 @@ async function boot() {
       signAtlasMB: +(signLayer.atlasBytes / 1048576).toFixed(2),
       buildings: world.buildings,
       chunks: world.chunks,
-      signs: signs.length,
+      signs: signLayer.count,
+      propPrims: game.prop_count(),
+      propCells: props.cellCount,
+      propMB: +(props.bytes / 1048576).toFixed(2),
+      wires: street.wireSegments,
+      crosswalks: street.crosswalks,
+      lamps: street.lamps,
+      postMB: +(post.bytes / 1048576).toFixed(1),
       crowd: crowd.count,
       pixelRatio: renderer.getPixelRatio(),
     };
@@ -161,6 +188,7 @@ async function boot() {
       fpsN = 0;
     }
 
+    renderer.info.reset();
     if (BENCH) {
       input.yaw += dt * 0.35;
       input.pitch = 0.55;
@@ -183,17 +211,20 @@ async function boot() {
     hours = (hours + dt / 60) % 24; // 1 real second = 1 game minute
     env.setTime(hours);
     env.follow(px, pz);
+    fill.position.set(px + Math.sin(input.yaw) * 2.0, 3.2, pz + Math.cos(input.yaw) * 2.0);
+    fill.intensity = env.night.value * 5;
 
-    camTarget.set(px, 1.55, pz);
+    props.update(px, pz, dt);
+    camTarget.set(px, 1.45, pz);
     const cp = Math.cos(input.pitch);
     camera.position.set(
       px + Math.sin(input.yaw) * cp * input.dist,
-      1.55 + Math.sin(input.pitch) * input.dist,
+      1.6 + Math.sin(input.pitch) * input.dist,
       pz + Math.cos(input.yaw) * cp * input.dist,
     );
     camera.lookAt(camTarget);
 
-    renderer.render(scene, camera);
+    post.render(scene, camera, env.grade);
 
     if (now - lastHud > 100) {
       lastHud = now;

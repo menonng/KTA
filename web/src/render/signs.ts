@@ -31,15 +31,14 @@ interface Cell {
 const FONT = '700 40px Pretendard, sans-serif';
 const ATLAS_W = 2048;
 
-function buildAtlas(labels: LabelDef[], uses: Set<string>) {
+function buildAtlas(uses: Set<string>) {
   const canvas = document.createElement('canvas');
   const ctx0 = canvas.getContext('2d')!;
   ctx0.font = FONT;
   const items: { key: string; text: string; vertical: boolean; w: number; h: number }[] = [];
   for (const key of uses) {
-    const [li, v] = key.split(':');
-    const text = labels[+li].t;
-    const vertical = v === '1';
+    const vertical = key[0] === '1';
+    const text = key.slice(2);
     if (vertical) {
       const chars = [...text.replace(/\s+/g, '')];
       items.push({ key, text, vertical, w: 54, h: chars.length * 46 + 14 });
@@ -90,6 +89,7 @@ function buildAtlas(labels: LabelDef[], uses: Set<string>) {
     const dst = row * ATLAS_W;
     for (let i = 0; i < ATLAS_W; i++) data[dst + i] = img[src + i * 4];
   }
+  canvas.width = canvas.height = 0; // release the 2D backing store
   const tex = new THREE.DataTexture(data, ATLAS_W, H, THREE.RedFormat, THREE.UnsignedByteType);
   tex.generateMipmaps = true;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
@@ -149,17 +149,31 @@ void main() {
   }
   vec3 col = mix(vBg, vFg, smoothstep(0.3, 0.7, m));
   if (border) col = vBg * 0.5;
-  col *= mix(0.95, 2.1, uNight);
+  col *= mix(0.95, 1.55, uNight);
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
   #include <fog_fragment>
 }`;
 
-export function buildSigns(labels: LabelDef[], signs: SignInst[], night: { value: number }) {
+export function buildSigns(labels: LabelDef[], input: SignInst[], night: { value: number }) {
+  // Vertical signs are boxes seen from both sides: emit a front and a back face.
+  const signs: SignInst[] = [];
+  for (const s of input) {
+    if (!s.vertical) {
+      signs.push(s);
+      continue;
+    }
+    const nx = Math.sin(s.yaw);
+    const nz = Math.cos(s.yaw);
+    signs.push({ ...s, x: s.x + nx * 0.17, z: s.z + nz * 0.17 });
+    signs.push({ ...s, x: s.x - nx * 0.17, z: s.z - nz * 0.17, yaw: s.yaw + Math.PI });
+  }
+  // Atlas cells are keyed by text, so one glyph run serves every color variant.
+  const key = (s: SignInst) => `${s.vertical ? 1 : 0}|${labels[s.label].t}`;
   const uses = new Set<string>();
-  for (const s of signs) uses.add(`${s.label}:${s.vertical ? 1 : 0}`);
-  const { tex, cells, H } = buildAtlas(labels, uses);
+  for (const s of signs) uses.add(key(s));
+  const { tex, cells, H } = buildAtlas(uses);
 
   const geo = new THREE.PlaneGeometry(1, 1);
   const n = signs.length;
@@ -169,7 +183,7 @@ export function buildSigns(labels: LabelDef[], signs: SignInst[], night: { value
   const meta = new Float32Array(n * 4);
   const col = new THREE.Color();
   signs.forEach((s, i) => {
-    const c = cells.get(`${s.label}:${s.vertical ? 1 : 0}`)!;
+    const c = cells.get(key(s))!;
     // u0, v0 (bottom), u1, v1 (top) in GL convention.
     rect[i * 4] = (c.x + 0.5) / ATLAS_W;
     rect[i * 4 + 1] = (H - c.y - c.h + 0.5) / H;
@@ -191,7 +205,6 @@ export function buildSigns(labels: LabelDef[], signs: SignInst[], night: { value
     fragmentShader: frag,
     uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { uAtlas: { value: null } }]),
     fog: true,
-    side: THREE.DoubleSide,
   });
   mat.uniforms.uAtlas.value = tex;
   mat.uniforms.uNight = night;
@@ -207,5 +220,45 @@ export function buildSigns(labels: LabelDef[], signs: SignInst[], night: { value
   });
   mesh.instanceMatrix.needsUpdate = true;
   mesh.computeBoundingSphere();
-  return { mesh, atlasBytes: ATLAS_W * H };
+
+  // Light boxes behind the faces (signs have depth, like real Korean signs),
+  // plus support legs for rooftop billboards.
+  const boxes = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 }),
+    input.length * 3,
+  );
+  let bi = 0;
+  const c = new THREE.Color();
+  const dark = new THREE.Color(0x2a2c30);
+  for (const s of input) {
+    const nx = Math.sin(s.yaw);
+    const nz = Math.cos(s.yaw);
+    const billboard = !s.vertical && s.h >= 3;
+    const depth = s.vertical ? 0.32 : billboard ? 0.5 : 0.22;
+    const off = s.vertical ? 0 : -depth * 0.5 - 0.01;
+    q.setFromAxisAngle(up, s.yaw);
+    m.compose(new THREE.Vector3(s.x + nx * off, s.y, s.z + nz * off), q, new THREE.Vector3(s.w + 0.08, s.h + 0.08, depth));
+    boxes.setMatrixAt(bi, m);
+    c.set(labels[s.label].bg).multiplyScalar(0.55);
+    boxes.setColorAt(bi++, c);
+    if (billboard) {
+      const legH = 1.4 + 0.2;
+      const base = s.y - s.h / 2 - legH;
+      for (const side of [-0.35, 0.35]) {
+        const lx = Math.cos(s.yaw) * s.w * side;
+        const lz = -Math.sin(s.yaw) * s.w * side;
+        m.compose(new THREE.Vector3(s.x + lx - nx * 0.3, base + legH / 2, s.z + lz - nz * 0.3), q, new THREE.Vector3(0.18, legH, 0.18));
+        boxes.setMatrixAt(bi, m);
+        boxes.setColorAt(bi++, dark);
+      }
+    }
+  }
+  boxes.count = bi;
+  boxes.castShadow = true;
+  boxes.receiveShadow = true;
+  boxes.instanceMatrix.needsUpdate = true;
+  boxes.computeBoundingSphere();
+  // Box matrices are centered; the shared BoxGeometry is centered too.
+  return { mesh, boxes, count: input.length, atlasBytes: ATLAS_W * H };
 }
