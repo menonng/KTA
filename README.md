@@ -3,12 +3,51 @@
 SNS에서 유행한 "Life in Korea" GTA풍 이미지(한국 일상을 보내는 오픈월드 게임 주인공)를 반실사 3D 웹게임으로 구현하는 프로젝트입니다.
 
 - 구현 계획서: [docs/implementation-plan.md](docs/implementation-plan.md)
+- 패러디 브랜드·국가기관 표기 규칙: [docs/brand-bible.md](docs/brand-bible.md)
+- 라이선스 목록: [docs/licenses.md](docs/licenses.md)
 - 에셋 스타일: GTA 시리즈 감성을 베이스로, 레퍼런스 이미지들을 기반으로 했습니다. Rockstar의 에셋·캐릭터·로고는 사용하지 않습니다.
-- 레퍼런스 메모: `docs/reference/` (저작권 이미지는 넣지 않습니다)
 
-## 목표 요약
+## 현재 상태 (Phase 0 일부)
 
-- 링크를 누르면 브라우저에서 바로 실행됩니다.
-- 메모리 목표 300MB, 상한 400MB입니다(크롬 탭 5개보다 적게).
-- 내장 그래픽만으로 동작하고 CPU 부담을 낮게 유지합니다. 무거운 처리는 Rust(WASM)가 맡습니다.
-- 맵 범위는 서울, 김포, 인천공항이고 지상과 지하를 모두 포함합니다.
+홍대입구역 주변 약 1km × 1km를 OpenStreetMap 데이터로 만들었습니다. 건물 2,225동, 도로, 지하철 출입구 9곳, 간판 약 1,380개, 보행자 90명이 있습니다.
+
+## 구조
+
+```
+crates/kta-core      게임 코어(Rust): 데이터 형식, 절차적 메시 생성, 충돌, 보행자
+crates/kta-wasm      wasm-bindgen 바인딩
+crates/kta-datatool  OSM → 압축 타일 + 간판 라벨 변환 도구
+web/                 Three.js 렌더러, HUD, 입력 (Vite)
+data-src/osm         원본 지도 데이터
+```
+
+## 빌드
+
+필요한 도구: Rust(stable) + `wasm32-unknown-unknown` 타깃, `wasm-bindgen-cli 0.2.130`, Node 22.
+
+```bash
+cd web && npm ci && cd ..
+./scripts/build.sh          # 데이터 변환 → WASM 빌드 → 웹 번들(web/dist)
+cd web && npm run preview   # http://localhost:4173
+```
+
+`web/src/wasm`(WASM 빌드 결과)와 `web/public/data`(변환된 지도)는 저장소에 포함합니다. 그래서 웹 쪽만 빌드할 때는 Rust 없이 `cd web && npm ci && npm run build`로 충분합니다.
+
+## 조작
+
+WASD 이동 · Shift 달리기 · 드래그 시점 · 휠 줌 · N 낮/밤 전환 · F3 성능 정보. URL 옵션: `?debug`(성능 정보), `?time=21.5`(시작 시각), `?scale=0.75`(렌더 배율), `?bench`(벤치마크), `?fps=30`(프레임 상한).
+
+## 배포 (Cloudflare Pages)
+
+Cloudflare 대시보드 → Workers & Pages → 만들기 → Pages → Git에 연결 → 이 저장소를 고르고 아래처럼 설정합니다.
+
+| 항목 | 값 |
+|---|---|
+| 프로덕션 브랜치 | `claude/korea-gta-implementation-plan-cu0rom` (나중에 main으로 변경) |
+| 프레임워크 프리셋 | 없음 |
+| 빌드 명령 | `npm ci && npm run build` |
+| 빌드 출력 디렉터리 | `dist` |
+| 루트 디렉터리 | `web` |
+| 환경 변수 | `NODE_VERSION` = `22` |
+
+푸시할 때마다 자동으로 배포되고, 브랜치마다 미리보기 주소가 생깁니다.

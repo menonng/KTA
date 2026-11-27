@@ -1,0 +1,25 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_game_free: (a: number, b: number) => void;
+export const game_building_count: (a: number) => number;
+export const game_chunk_bounds: (a: number, b: number) => [number, number];
+export const game_chunk_count: (a: number) => number;
+export const game_chunk_desc: (a: number, b: number) => [number, number];
+export const game_crowd_count: (a: number) => number;
+export const game_crowd_ptr: (a: number) => number;
+export const game_entrances: (a: number) => [number, number];
+export const game_free_meshes: (a: number) => void;
+export const game_minimap_buildings: (a: number) => [number, number];
+export const game_minimap_roads: (a: number) => [number, number];
+export const game_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+export const game_player_ptr: (a: number) => number;
+export const game_roads_desc: (a: number) => [number, number];
+export const game_signs: (a: number) => [number, number];
+export const game_spawn: (a: number, b: number, c: number) => void;
+export const game_step: (a: number, b: number, c: number, d: number, e: number) => void;
+export const __wbindgen_externrefs: WebAssembly.Table;
+export const __wbindgen_free: (a: number, b: number, c: number) => void;
+export const __wbindgen_malloc: (a: number, b: number) => number;
+export const __externref_table_dealloc: (a: number) => void;
+export const __wbindgen_start: () => void;

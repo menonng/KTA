@@ -1,0 +1,123 @@
+//! Thin wasm-bindgen layer. Bulk data is exposed as (pointer, length) pairs
+//! into WASM memory so JS can read it without per-object calls.
+
+use kta_core::World;
+use wasm_bindgen::prelude::*;
+
+#[wasm_bindgen]
+pub struct Game {
+    w: World,
+}
+
+fn ptr<T>(v: &[T]) -> u32 {
+    v.as_ptr() as usize as u32
+}
+
+#[wasm_bindgen]
+impl Game {
+    #[wasm_bindgen(constructor)]
+    pub fn new(data: &[u8], seed: u32, crowd: u32) -> Result<Game, JsError> {
+        World::new(data, seed, crowd as usize)
+            .map(|w| Game { w })
+            .map_err(|e| JsError::new(e.0))
+    }
+
+    pub fn chunk_count(&self) -> u32 {
+        self.w.chunks.len() as u32
+    }
+
+    /// [pos_ptr, pos_len, nrm_ptr, nrm_len, attr_ptr, attr_len, idx_ptr, idx_len, buildings]
+    pub fn chunk_desc(&self, i: u32) -> Vec<u32> {
+        let c = &self.w.chunks[i as usize];
+        vec![
+            ptr(&c.pos), c.pos.len() as u32,
+            ptr(&c.nrm), c.nrm.len() as u32,
+            ptr(&c.attr), c.attr.len() as u32,
+            ptr(&c.idx), c.idx.len() as u32,
+            c.buildings,
+        ]
+    }
+
+    pub fn chunk_bounds(&self, i: u32) -> Vec<f32> {
+        self.w.chunks[i as usize].bounds.to_vec()
+    }
+
+    /// [pos_ptr, pos_len, attr_ptr, attr_len, idx_ptr, idx_len]
+    pub fn roads_desc(&self) -> Vec<u32> {
+        let r = &self.w.roads;
+        vec![ptr(&r.pos), r.pos.len() as u32, ptr(&r.attr), r.attr.len() as u32, ptr(&r.idx), r.idx.len() as u32]
+    }
+
+    pub fn free_meshes(&mut self) {
+        self.w.free_meshes();
+    }
+
+    pub fn building_count(&self) -> u32 {
+        self.w.map.buildings.len() as u32
+    }
+
+    /// Flattened entrances: x, z, yaw, exit_no.
+    pub fn entrances(&self) -> Vec<f32> {
+        self.w.map.entrances.iter().flat_map(|e| [e.x, e.z, e.yaw, e.exit_no as f32]).collect()
+    }
+
+    /// Flattened signs: x, y, z, yaw, w, h, label, vertical.
+    pub fn signs(&self) -> Vec<f32> {
+        self.w
+            .map
+            .signs
+            .iter()
+            .flat_map(|s| [s.x, s.y, s.z, s.yaw, s.w, s.h, s.label as f32, s.vertical as u8 as f32])
+            .collect()
+    }
+
+    /// Footprints for the minimap: n, x0, z0, x1, z1, ... per building.
+    pub fn minimap_buildings(&self) -> Vec<f32> {
+        let mut o = Vec::new();
+        for b in &self.w.map.buildings {
+            o.push(b.pts.len() as f32);
+            for p in &b.pts {
+                o.push(p[0]);
+                o.push(p[1]);
+            }
+        }
+        o
+    }
+
+    /// Roads for the minimap: n, kind, width, x0, z0, ... per road.
+    pub fn minimap_roads(&self) -> Vec<f32> {
+        let mut o = Vec::new();
+        for r in &self.w.map.roads {
+            o.push(r.pts.len() as f32);
+            o.push(r.kind as f32);
+            o.push(r.width);
+            for p in &r.pts {
+                o.push(p[0]);
+                o.push(p[1]);
+            }
+        }
+        o
+    }
+
+    pub fn spawn(&mut self, x: f32, z: f32) {
+        self.w.spawn(x, z);
+    }
+
+    pub fn step(&mut self, dt: f32, bits: u32, fx: f32, fz: f32) {
+        self.w.step(dt, bits, [fx, fz]);
+    }
+
+    /// Pointer to 6 floats: x, y, z, yaw, speed, phase.
+    pub fn player_ptr(&self) -> u32 {
+        ptr(&self.w.player.state)
+    }
+
+    /// Pointer to 4 floats per pedestrian: x, z, yaw, phase.
+    pub fn crowd_ptr(&self) -> u32 {
+        ptr(&self.w.crowd.out)
+    }
+
+    pub fn crowd_count(&self) -> u32 {
+        self.w.crowd.len() as u32
+    }
+}
