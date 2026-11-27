@@ -1,9 +1,9 @@
 # KTA
 
-SNS에서 유행한 "my life in korea GTA" 이미지를 스타일라이즈드 3D 웹게임으로 구현하는 프로젝트입니다.
+SNS에서 유행한 "Life in Korea" GTA풍 이미지(한국 일상을 보내는 오픈월드 게임 주인공)를 반실사 3D 웹게임으로 구현하는 프로젝트입니다.
 
 - 구현 계획서: [docs/implementation-plan.md](docs/implementation-plan.md)
-- 원본 레퍼런스 이미지: `docs/reference/` (추가 예정)
+- 레퍼런스 메모: `docs/reference/` (저작권 이미지는 넣지 않음)
 
 ## 목표 요약
 
