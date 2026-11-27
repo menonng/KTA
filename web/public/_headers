@@ -1,10 +1,15 @@
+# Cloudflare Pages response headers (copied to dist/ by Vite).
+# Cross-origin isolation: lets the game use WASM threads and precise memory
+# measurement later. Every asset is same-origin, so require-corp is safe.
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
   X-Content-Type-Options: nosniff
 
+# Vite puts a content hash in every file name under assets/: cache for a year.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
-/data/*
-  Cache-Control: public, max-age=3600
+# data/, textures/ and basis/ keep fixed file names, so they stay on the Pages
+# default (revalidate each visit; unchanged files answer 304). A long max-age
+# here could pair a new game build with old map or sign files.

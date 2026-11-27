@@ -48,9 +48,9 @@ Cloudflare 대시보드 → Workers & Pages → 만들기 → Pages → Git에 �
 |---|---|
 | 프로덕션 브랜치 | `claude/korea-gta-implementation-plan-cu0rom` (나중에 main으로 변경) |
 | 프레임워크 프리셋 | 없음 |
-| 빌드 명령 | `npm ci && npm run build` |
+| 빌드 명령 | `npm run build` (의존성 설치는 Cloudflare가 먼저 자동으로 합니다) |
 | 빌드 출력 디렉터리 | `dist` |
 | 루트 디렉터리 | `web` |
-| 환경 변수 | `NODE_VERSION` = `22` |
+| 환경 변수 | 필요 없음(`web/.nvmrc`가 Node 22를 지정) |
 
-푸시할 때마다 자동으로 배포되고, 브랜치마다 미리보기 주소가 생깁니다.
+푸시할 때마다 자동으로 배포되고, 브랜치마다 미리보기 주소가 생깁니다. 캐시 헤더는 `web/public/_headers`에 있습니다.
