@@ -194,15 +194,23 @@ fn classify(t: &Tags, id: u64) -> Option<(String, &'static str, &'static str, bo
             ("restaurant", _, _) => Some(match cuisine {
                 c if c.contains("korean") => pick(&["korean", "baekban", "gukbap"]),
                 c if c.contains("chicken") => "chicken".into(),
-                c if c.contains("japanese") || c.contains("sushi") || c.contains("ramen") => pick(&["japanese", "ramen", "izakaya"]),
+                c if c.contains("sushi") => "sushi".into(),
+                c if c.contains("ramen") => "ramen".into(),
+                c if c.contains("japanese") => pick(&["japanese", "ramen", "izakaya", "sushi"]),
+                _ if has("마라") || has("양꼬치") => "mala".into(),
                 c if c.contains("chinese") => "chinese".into(),
+                c if c.contains("vietnam") => "vietnamese".into(),
+                c if c.contains("thai") => "thai".into(),
+                c if c.contains("indian") => "indian".into(),
+                c if c.contains("mexican") => "mexican".into(),
                 c if c.contains("pizza") => "pizza".into(),
-                c if c.contains("barbecue") || c.contains("bbq") => pick(&["bbq", "bbq"]),
-                c if c.contains("italian") || c.contains("western") => "western".into(),
+                c if c.contains("italian") => "italian".into(),
+                c if c.contains("barbecue") || c.contains("bbq") => "bbq".into(),
+                c if c.contains("western") || c.contains("steak") => "western".into(),
                 _ => pick(&["restaurant", "restaurant", "restaurant", "snack"]),
             }),
             ("fast_food", _, _) => Some(pick(&["snack", "snack", "tteokbokki"])),
-            ("bar", _, _) | ("pub", _, _) => Some(pick(&["hof", "pocha", "bar", "pocha"])),
+            ("bar", _, _) | ("pub", _, _) => Some(pick(&["bar", "bar", "hof", "bar", "pocha"])),
             ("nightclub", _, _) => Some("club".into()),
             ("pharmacy", _, _) => Some("pharmacy".into()),
             ("clinic", _, _) | ("doctors", _, _) => Some("clinic".into()),
@@ -670,20 +678,21 @@ fn main() {
     // ---- Streetscape density pass (generic names only; brands via billboards) ----
     // Category mixes (weights) typical of Hongdae streets.
     const GROUND: &[(&str, u32)] = &[
-        ("cafe", 14), ("restaurant", 12), ("clothes", 10), ("hair", 7), ("bar", 6), ("pocha", 5), ("cosmetics", 5), ("snack", 5),
+        ("cafe", 14), ("restaurant", 12), ("clothes", 10), ("hair", 7), ("bar", 6), ("pocha", 1), ("cosmetics", 5), ("snack", 5),
         ("hof", 4), ("vintage", 4), ("bbq", 4), ("dessert", 4), ("gift", 4), ("photo", 3), ("nail", 3), ("chicken", 3), ("korean", 3),
         ("japanese", 3), ("coinkaraoke", 3), ("realestate", 3), ("ramen", 2), ("chinese", 2), ("bakery", 2), ("karaoke", 2), ("shoes", 2),
         ("phone", 2), ("mart", 2), ("studio", 2), ("arcade", 2), ("izakaya", 2), ("western", 2), ("burger", 2), ("tteokbokki", 2),
         ("pc", 1), ("pharmacy", 1), ("laundry", 1), ("tattoo", 1), ("escape", 1), ("boardgame", 1), ("icecream", 1), ("liquor", 1),
+        ("sushi", 1), ("mala", 2), ("vietnamese", 1), ("thai", 1), ("italian", 2), ("mexican", 1), ("indian", 1),
         ("optician", 1), ("books", 1), ("pizza", 1), ("massage", 1),
     ];
     const UPPER: &[(&str, u32)] = &[
         ("academy", 8), ("music_academy", 6), ("clinic", 6), ("karaoke", 6), ("pc", 6), ("pilates", 5), ("billiards", 5), ("studio", 5),
         ("dentist", 4), ("hof", 4), ("bar", 4), ("roomcafe", 4), ("escape", 4), ("hair", 4), ("cafe", 4), ("realestate", 3), ("coinkaraoke", 3),
-        ("manga", 3), ("boardgame", 3), ("nail", 3), ("pocha", 3), ("arcade", 2), ("massage", 2), ("restaurant", 2),
+        ("manga", 3), ("boardgame", 3), ("nail", 3), ("arcade", 2), ("massage", 2), ("restaurant", 2), ("izakaya", 1),
     ];
     const VERT: &[(&str, u32)] = &[
-        ("karaoke", 6), ("pc", 5), ("hof", 5), ("billiards", 4), ("bar", 4), ("club", 2), ("roomcafe", 3), ("arcade", 3), ("pocha", 4),
+        ("karaoke", 6), ("pc", 5), ("hof", 5), ("billiards", 4), ("bar", 4), ("club", 2), ("roomcafe", 3), ("arcade", 3), ("pocha", 1),
         ("restaurant", 4), ("cafe", 3), ("hair", 3), ("clinic", 2), ("dentist", 2), ("academy", 2), ("coinkaraoke", 3),
     ];
     fn wpick(list: &[(&'static str, u32)], r: f32) -> &'static str {
@@ -863,7 +872,7 @@ fn main() {
             }
         }
         // Vacancy banners (임대) on some upper floors.
-        if rnd() < 0.08 {
+        if rnd() < 0.045 {
             let floor = 1 + (rnd() * (lv - 1) as f32) as u32;
             let w = (len * 0.6).clamp(3.0, 6.0).min(len - 0.4);
             let y = floor as f32 * 3.3 + 1.4;

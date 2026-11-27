@@ -20,7 +20,7 @@ const req = JSON.parse(readFileSync(reqPath, 'utf8'));
 
 // fonts.css: one @import per family/weight the designs may use.
 const { FONTS, EMOJI } = await import('./design.mjs');
-const specs = new Set([...Object.values(FONTS).flat(), '400 Do Hyeon', '400 Noto Sans KR', '900 Noto Sans KR', '700 Noto Sans KR', '500 Noto Sans KR', '700 Gothic A1', '500 Montserrat', '300 Oswald', '400 Playfair Display', '900 Montserrat']);
+const specs = new Set([...Object.values(FONTS).flat(), '400 Do Hyeon', '400 Noto Sans KR', '900 Noto Sans KR', '700 Noto Sans KR', '500 Noto Sans KR', '700 Gothic A1', '500 Montserrat', '300 Oswald', '400 Playfair Display', '900 Montserrat', '600 Montserrat', '700 Montserrat', '700 Noto Serif KR', '400 Noto Sans JP', '700 Noto Sans JP', '400 Noto Serif TC', '700 Noto Serif TC', '400 Noto Serif SC', '700 Noto Serif SC', '400 Noto Sans Thai', '700 Noto Sans Thai']);
 const imports = new Set();
 for (const s of specs) {
   const m = s.match(/^(\d{3}) (.*)$/);
@@ -63,6 +63,10 @@ const prevDir = join(here, 'work');
 mkdirSync(prevDir, { recursive: true });
 raws.forEach((r, i) => writeFileSync(join(prevDir, `page${i}.rgba`), r));
 
+if (process.env.PREVIEW) {
+  console.log('PREVIEW: pages written to work/, encoding skipped');
+  process.exit(0);
+}
 // Encode pages in parallel child processes (one KTX2 per page; the client
 // merges them into one texture array, and per-page files allow streaming).
 mkdirSync(join(pubDir, 'textures'), { recursive: true });

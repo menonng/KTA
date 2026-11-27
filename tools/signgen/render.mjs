@@ -6,7 +6,7 @@
 //   a < 0.5  : coverage (transparent background styles), no emission
 //   a >= 0.5 : opaque, emission = (a - 0.5) * 2 (lit faces, neon, channel letters)
 
-import { makeDesign, DENSITY, EMOJI } from './design.mjs';
+import { makeDesign, DENSITY, EMOJI, FALLBACK } from './design.mjs';
 
 const S = 2048;
 const PAD = 4;
@@ -15,9 +15,27 @@ function parseFont(spec) {
   const m = spec.match(/^(\d{3}) (.*)$/);
   return { weight: m ? m[1] : '400', fam: m ? m[2] : spec };
 }
+// spec: "[weight ]Family[|script]" — the script picks the fallback chain
+// (Japanese, hanja, Thai glyphs missing from a display face).
 function fontStr(spec, px) {
-  const { weight, fam } = parseFont(spec);
-  return `${weight} ${px.toFixed(1)}px "${fam}", "Do Hyeon", "Noto Sans KR", "${EMOJI}"`;
+  const [sp, fb = 'ko'] = spec.split('|');
+  const { weight, fam } = parseFont(sp);
+  const chain = (FALLBACK[fb] || FALLBACK.ko).map((f) => `"${f}"`).join(', ');
+  return `${weight} ${px.toFixed(1)}px "${fam}", ${chain}, "${EMOJI}"`;
+}
+const isLatinText = (t) => !/[\u3131-\uD79D\u3040-\u30FF\u4E00-\u9FFF\u0E00-\u0E7F]/.test(t);
+function withFallbacks(d) {
+  const tag = (font, fb) => (font && !font.includes('|') ? `${font}|${fb}` : font);
+  if (d.main) d.main.font = tag(d.main.font, d.fb || 'ko');
+  for (const s of d.sub) s.font = tag(s.font, s.fb || (isLatinText(s.text) ? 'latin' : 'ko'));
+  for (const t of d.tenants || []) t.font = tag(t.font, 'ko');
+  return d;
+}
+
+// Small deterministic RNG for painted textures (wood grain).
+function prng(seed) {
+  let a = (seed * 2654435761) >>> 0 || 1;
+  return () => ((a = (Math.imul(a, 1664525) + 1013904223) >>> 0) / 4294967296);
 }
 
 const mctx = document.createElement('canvas').getContext('2d');
@@ -108,6 +126,32 @@ function fillBg(ctx, bg, W, H) {
     ctx.fillStyle = g;
   } else ctx.fillStyle = bg.c1;
   ctx.fillRect(0, 0, W, H);
+  if (bg.type === 'wood') {
+    // Natural timber board: horizontal grain lines (stretch-safe at the edges).
+    const r = prng(Math.round(W * 7 + H * 13));
+    for (let i = 0; i < H * 0.9; i++) {
+      const y = r() * H;
+      ctx.strokeStyle = r() < 0.5 ? 'rgba(70,40,15,0.22)' : 'rgba(255,235,200,0.14)';
+      ctx.lineWidth = 0.6 + r() * 1.4;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      for (let x = 0; x <= W; x += W / 8) ctx.lineTo(x, y + Math.sin(x * 0.05 + y) * H * 0.012);
+      ctx.stroke();
+    }
+    const v = ctx.createLinearGradient(0, 0, 0, H);
+    v.addColorStop(0, 'rgba(255,255,255,0.08)');
+    v.addColorStop(1, 'rgba(0,0,0,0.18)');
+    ctx.fillStyle = v;
+    ctx.fillRect(0, 0, W, H);
+  }
+  if (bg.type === 'noren') {
+    // Indigo cloth split into panels, hanging from a rod at the top.
+    const n = Math.max(3, Math.min(5, Math.round(W / H / 1.2)));
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    for (let k = 1; k < n; k++) ctx.fillRect((W * k) / n - 1, H * 0.16, 2, H);
+    ctx.fillStyle = 'rgba(255,255,255,0.10)';
+    ctx.fillRect(0, 0, W, H * 0.07);
+  }
   if (bg.type === 'band') {
     ctx.fillStyle = bg.c2;
     ctx.fillRect(0, 0, W, H * 0.075);
@@ -434,7 +478,7 @@ async function toB64(u8) {
 }
 
 window.signgen = async (reqs, maxPages) => {
-  const designs = reqs.map((r, i) => makeDesign(r, i));
+  const designs = reqs.map((r, i) => withFallbacks(makeDesign(r, i)));
   // Load every font subset the designs need.
   const need = new Map();
   const add = (spec, text) => { if (spec && text) need.set(spec, (need.get(spec) || '') + text); };
