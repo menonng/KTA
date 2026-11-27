@@ -36,6 +36,21 @@ impl SegGrid {
                 }
             }
         }
+        // Standing light boxes on the pavement are solid too (low: the camera
+        // ray passes over them).
+        for sg in m.signs.iter().filter(|s| s.mount == 3) {
+            let (sn, cs) = sg.yaw.sin_cos();
+            let ax = [cs, -sn]; // face width axis
+            let az = [sn, cs]; // face normal
+            let (hx, hz) = (sg.w * 0.5 + 0.07, 0.22);
+            let c = [sg.x, sg.z];
+            let corner = |i: f32, j: f32| [c[0] + ax[0] * hx * i + az[0] * hz * j, c[1] + ax[1] * hx * i + az[1] * hz * j];
+            let q = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
+            for i in 0..4 {
+                segs.push([q[i], q[(i + 1) % 4]]);
+                heights.push(1.2);
+            }
+        }
         if segs.is_empty() {
             mn = [0.0, 0.0];
             mx = [1.0, 1.0];

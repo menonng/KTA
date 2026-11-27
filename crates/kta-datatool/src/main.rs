@@ -164,9 +164,9 @@ fn classify(t: &Tags, id: u64) -> Option<(String, &'static str, &'static str, bo
     if brand == "KT" || name.starts_with("KT ") || has("KT플라자") {
         return b("QT", "#FF3B30", "#1A1A1A");
     }
-    if has("삼성") || has("Samsung") || has("SAMSUNG") {
-        return b("심송", "#FFFFFF", "#1428A0");
-    }
+    // 삼성(심송) appears on billboards only: a conglomerate-named shop front on
+    // a Hongdae street reads wrong, so electronics stores fall through to the
+    // generic phone/electronics category below.
     if has("따릉이") || has("Ttareungyi") {
         return b("또롱이", "#FFFFFF", "#3BAA34");
     }
@@ -223,7 +223,7 @@ fn classify(t: &Tags, id: u64) -> Option<(String, &'static str, &'static str, bo
             (_, "shoes", _) => Some("shoes".into()),
             (_, "cosmetics", _) | (_, "beauty", _) => Some(pick(&["cosmetics", "nail"])),
             (_, "hairdresser", _) => Some("hair".into()),
-            (_, "mobile_phone", _) => Some("phone".into()),
+            (_, "mobile_phone", _) | (_, "electronics", _) => Some("phone".into()),
             (_, "optician", _) => Some("optician".into()),
             (_, "books", _) => Some("books".into()),
             (_, "supermarket", _) => Some("mart".into()),
@@ -539,6 +539,15 @@ fn main() {
     let mut signs: Vec<Sign> = Vec::new();
     let (mut brand_count, mut generic_count, mut skipped) = (0, 0, 0);
     let mut poi_fronts: Vec<(usize, usize)> = Vec::new();
+    // Ground-floor shop fronts (building, edge, centre s, width, category) that
+    // get window decals, awnings and standing boards later.
+    let mut fronts: Vec<(usize, usize, f32, f32, String)> = Vec::new();
+    // Rooftop neon crosses (one shared artwork) for churches.
+    let mut cross_label: Option<u16> = None;
+    let mut roof_cross = |labels: &mut Vec<Label>, signs: &mut Vec<Sign>, b: &Building, a: P2, dir: P2, nrm: P2, s: f32| {
+        let li = *cross_label.get_or_insert_with(|| push_label(labels, Label { kind: "cross", cat: "church".into(), brand: String::new(), fg: "", bg: "", w: 1.1, h: 2.0, seed: 7, floor: 0, tenants: vec![] }));
+        signs.push(Sign { x: a[0] + dir[0] * s - nrm[0] * 1.2, z: a[1] + dir[1] * s - nrm[1] * 1.2, y: b.height + 0.5 + 1.0, yaw: nrm[0].atan2(nrm[1]), w: 1.1, h: 2.0, label: li, vertical: true, mount: 5 });
+    };
     for (id, lat, lon, t) in &poi_nodes {
         let Some((txt, fg, bg, is_brand)) = classify(t, *id as u64) else { continue };
         let p = pr.p(*lat, *lon);
@@ -611,6 +620,7 @@ fn main() {
                 h,
                 label: li,
                 vertical: true,
+                mount: 0,
             });
         } else {
             let mut w = (units * 0.8 + 1.4).max(len * 0.7).clamp(2.4, 10.0);
@@ -637,6 +647,9 @@ fn main() {
                     occ.push((s0, s1, floor));
                     if floor == 0 {
                         poi_fronts.push((bi, ei));
+                        if !is_brand {
+                            fronts.push((bi, ei, s, w, cat.clone()));
+                        }
                     }
                     let hh = if floor == 0 { hgt } else { 0.95 };
                     let li = push_label(&mut labels, Label { kind: if floor == 0 { "fascia" } else { "upper" }, cat: cat.clone(), brand: brand.clone(), fg, bg, w, h: hh, seed, floor, tenants: vec![] });
@@ -649,7 +662,31 @@ fn main() {
                         h: hh,
                         label: li,
                         vertical: false,
+                mount: 0,
                     });
+                    if floor == 0 && matches!(brand.as_str(), "식스텐" | "GG24" | "CUZ") {
+                        // Printed band over the windows (logo + 삼각김밥 ...), as on the real shop fronts.
+                        let li = push_label(&mut labels, Label { kind: "band", cat: "brand".into(), brand: brand.clone(), fg, bg, w, h: 0.4, seed, floor: 0, tenants: vec![] });
+                        signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.31, z: a[1] + dir[1] * s + nrm[1] * 0.31, y: 2.48, yaw: nrm[0].atan2(nrm[1]), w, h: 0.4, label: li, vertical: false, mount: 0 });
+                    }
+                    if cat == "church" && b.height < 40.0 {
+                        roof_cross(&mut labels, &mut signs, b, a, dir, nrm, s);
+                    }
+                    if floor == 0 && brand == "스타덕스" {
+                        let r = 0.45;
+                        let sd = if s + w * 0.5 + 0.55 < len - 0.2 {
+                            s + w * 0.5 + 0.55
+                        } else if s - w * 0.5 - 0.55 > 0.2 {
+                            s - w * 0.5 - 0.55
+                        } else {
+                            -1.0
+                        };
+                        let (sd, yd) = if sd > 0.0 { (sd, 3.55) } else { (sclamp(s + w * 0.5 - 0.6, 0.6, len - 0.6), 4.75) };
+                        if yd + r < b.height - 0.2 {
+                            let li = push_label(&mut labels, Label { kind: "disc", cat: "brand".into(), brand: brand.clone(), fg, bg, w: 2.0 * r, h: 2.0 * r, seed, floor: 0, tenants: vec![] });
+                            signs.push(Sign { x: a[0] + dir[0] * sd + nrm[0] * 0.62, z: a[1] + dir[1] * sd + nrm[1] * 0.62, y: yd, yaw: dir[0].atan2(dir[1]), w: 2.0 * r, h: 2.0 * r, label: li, vertical: true, mount: 4 });
+                        }
+                    }
                     placed = true;
                     break;
                 }
@@ -801,7 +838,8 @@ fn main() {
                 let p = [a[0] + dir[0] * s + nrm[0] * 0.25, a[1] + dir[1] * s + nrm[1] * 0.25];
                 let k = pool_f.pick(p);
                 let li = pool_f.ix[k];
-                signs.push(Sign { x: p[0], z: p[1], y: 3.55, yaw: nrm[0].atan2(nrm[1]), w, h: 1.15, label: li, vertical: false });
+                signs.push(Sign { x: p[0], z: p[1], y: 3.55, yaw: nrm[0].atan2(nrm[1]), w, h: 1.15, label: li, vertical: false, mount: 0 });
+                fronts.push((bi, ei, s, w, labels[li as usize].cat.clone()));
                 ground_n += 1;
             }
         }
@@ -834,8 +872,23 @@ fn main() {
             let p = [a[0] + dir[0] * s + nrm[0] * 0.25, a[1] + dir[1] * s + nrm[1] * 0.25];
             let k = pool_u.pick(p);
             let li = pool_u.ix[k];
-            signs.push(Sign { x: p[0], z: p[1], y, yaw: nrm[0].atan2(nrm[1]), w, h: 0.95, label: li, vertical: false });
+            signs.push(Sign { x: p[0], z: p[1], y, yaw: nrm[0].atan2(nrm[1]), w, h: 0.95, label: li, vertical: false, mount: 0 });
             extra_n += 1;
+        }
+        // Top-floor church with its rooftop neon cross.
+        if lv >= 4 && lv <= 9 && rnd() < 0.035 {
+            let floor = lv - 1;
+            let w = (len * 0.5).clamp(3.0, 5.5).min(len - 0.4);
+            let y = floor as f32 * 3.3 + 1.7;
+            let s = len * 0.5;
+            let occ = occupancy.entry((bi, ei)).or_default();
+            if w > 2.0 && y + 0.6 < b.height && !occ.iter().any(|&(o0, o1, f)| f == floor && s - w * 0.5 < o1 + 0.2 && s + w * 0.5 > o0 - 0.2) {
+                occ.push((s - w * 0.5, s + w * 0.5, floor));
+                let li = push_label(&mut labels, Label { kind: "upper", cat: "church".into(), brand: String::new(), fg: "", bg: "", w, h: 0.95, seed: (rnd() * 4.0e9) as u64, floor, tenants: vec![] });
+                signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.25, z: a[1] + dir[1] * s + nrm[1] * 0.25, y, yaw: nrm[0].atan2(nrm[1]), w, h: 0.95, label: li, vertical: false, mount: 0 });
+                roof_cross(&mut labels, &mut signs, b, a, dir, nrm, s);
+                extra_n += 1;
+            }
         }
         // Projecting signs at an edge end: a tenant directory column (one panel
         // per floor, very common on Korean mixed-use buildings) or single signs.
@@ -851,7 +904,7 @@ fn main() {
                 let hh = (floors as f32 * 3.3 - 0.5).min(b.height - y0 - 0.4);
                 if hh > 2.5 {
                     let li = push_label(&mut labels, Label { kind: "stack", cat: "stack".into(), brand: String::new(), fg: "", bg: "", w: 1.05, h: hh, seed: (rnd() * 4.0e9) as u64, floor: 1, tenants });
-                    signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.75, z: a[1] + dir[1] * s + nrm[1] * 0.75, y: y0 + hh * 0.5, yaw: dir[0].atan2(dir[1]), w: 1.05, h: hh, label: li, vertical: true });
+                    signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.75, z: a[1] + dir[1] * s + nrm[1] * 0.75, y: y0 + hh * 0.5, yaw: dir[0].atan2(dir[1]), w: 1.05, h: hh, label: li, vertical: true, mount: 0 });
                     extra_n += 1;
                 }
             } else {
@@ -865,7 +918,7 @@ fn main() {
                         pool_v.uses[k].pop();
                         break;
                     }
-                    signs.push(Sign { x: p[0], z: p[1], y: y0 + hh * 0.5, yaw: dir[0].atan2(dir[1]), w: 0.72, h: hh, label: li, vertical: true });
+                    signs.push(Sign { x: p[0], z: p[1], y: y0 + hh * 0.5, yaw: dir[0].atan2(dir[1]), w: 0.72, h: hh, label: li, vertical: true, mount: 0 });
                     y0 += hh + 0.25;
                     extra_n += 1;
                 }
@@ -881,12 +934,101 @@ fn main() {
             if w > 2.0 && y + 0.6 < b.height && !occ.iter().any(|&(o0, o1, f)| f == floor && s - w * 0.5 < o1 + 0.2 && s + w * 0.5 > o0 - 0.2) {
                 occ.push((s - w * 0.5, s + w * 0.5, floor));
                 let li = push_label(&mut labels, Label { kind: "banner", cat: "rent".into(), brand: String::new(), fg: "", bg: "", w, h: 0.9, seed: (rnd() * 4.0e9) as u64, floor, tenants: vec![] });
-                signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.12, z: a[1] + dir[1] * s + nrm[1] * 0.12, y, yaw: nrm[0].atan2(nrm[1]), w, h: 0.9, label: li, vertical: false });
+                signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.12, z: a[1] + dir[1] * s + nrm[1] * 0.12, y, yaw: nrm[0].atan2(nrm[1]), w, h: 0.9, label: li, vertical: false, mount: 0 });
                 extra_n += 1;
             }
         }
     }
     eprintln!("density pass: ground fascia +{}, upper/projecting/banners +{}", ground_n, extra_n);
+
+    // ---- Shop-front extras: window decals, awnings, standing light boxes ----
+    // Pools per trade group so a café never shows a dental-clinic decal.
+    fn group_of(cat: &str) -> &'static str {
+        match cat {
+            "cafe" | "dessert" | "bakery" | "icecream" => "cafe",
+            "restaurant" | "korean" | "baekban" | "gukbap" | "bbq" | "snack" | "tteokbokki" | "chicken" | "japanese" | "ramen" | "izakaya" | "sushi" | "chinese"
+            | "mala" | "vietnamese" | "thai" | "italian" | "pizza" | "western" | "mexican" | "indian" | "burger" | "pocha" => "food",
+            "hof" | "bar" | "club" | "liquor" => "bar",
+            "clothes" | "vintage" | "shoes" | "gift" | "cosmetics" | "books" | "stationery" | "music" | "mart" | "phone" | "optician" | "tattoo" => "retail",
+            _ => "service",
+        }
+    }
+    let group_pool = |labels: &mut Vec<Label>, kind: &'static str, group: &'static str, n: usize, w: f32, h: f32, salt: u64| -> Pool {
+        let mut ix = Vec::new();
+        let mut hh = salt;
+        for _ in 0..n {
+            hh = hash(hh);
+            ix.push(push_label(labels, Label { kind, cat: group.into(), brand: String::new(), fg: "", bg: "", w, h, seed: hh % 4_294_967_296, floor: 0, tenants: vec![] }));
+        }
+        Pool { uses: vec![Vec::new(); ix.len()], ix, h: salt ^ 0x5678 }
+    };
+    let groups = ["cafe", "food", "bar", "retail", "service"];
+    let mut decal_pools: Vec<Pool> = groups.iter().enumerate().map(|(k, g)| group_pool(&mut labels, "decal", g, [40, 50, 24, 44, 36][k], 1.7, 0.55, 0xd0 + k as u64)).collect();
+    let mut stand_pools: Vec<Pool> = groups.iter().enumerate().map(|(k, g)| group_pool(&mut labels, "stand", g, [26, 34, 16, 14, 14][k], 0.58, 1.05, 0x5a + k as u64)).collect();
+    let mut awning_pools: Vec<Pool> = ["cafe", "food", "retail"].iter().enumerate().map(|(k, g)| group_pool(&mut labels, "awning", g, [26, 26, 14][k], 1.2, 0.62, 0xa0 + k as u64)).collect();
+    let (mut n_decal, mut n_awning, mut n_stand) = (0usize, 0usize, 0usize);
+    for (fi, (bi, ei, s, w, cat)) in fronts.iter().enumerate() {
+        let b = &buildings[*bi];
+        let n = b.pts.len();
+        let (a, c) = (b.pts[*ei], b.pts[(*ei + 1) % n]);
+        let d = [c[0] - a[0], c[1] - a[1]];
+        let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        if len < 2.0 {
+            continue;
+        }
+        let dir = [d[0] / len, d[1] / len];
+        let nrm = [dir[1], -dir[0]];
+        let g = group_of(cat);
+        let gi = groups.iter().position(|x| *x == g).unwrap();
+        let mut h = hash(fi as u64 * 977 + 13);
+        let mut rnd = || {
+            h = hash(h);
+            (h % 10_000) as f32 / 10_000.0
+        };
+        let at = |sv: f32, out: f32| [a[0] + dir[0] * sv + nrm[0] * out, a[1] + dir[1] * sv + nrm[1] * out];
+        let face_yaw = nrm[0].atan2(nrm[1]);
+        // Awning under the fascia: cafés, bakeries, some restaurants and shops.
+        let p_awn = match g { "cafe" => 0.34, "food" => 0.16, "retail" => 0.12, _ => 0.0 };
+        let awning = rnd() < p_awn && *w >= 2.4;
+        if awning {
+            let ai = match g { "cafe" => 0, "food" => 1, _ => 2 };
+            let aw = (*w - 0.2).min(7.0);
+            let p = at(*s, 0.02);
+            let k = awning_pools[ai].pick(p);
+            let li = awning_pools[ai].ix[k];
+            signs.push(Sign { x: p[0], z: p[1], y: 2.64, yaw: face_yaw, w: aw, h: 1.0, label: li, vertical: false, mount: 2 });
+            n_awning += 1;
+        }
+        // Window lettering on the shop glass (one or two panes).
+        if rnd() < 0.55 {
+            let count = if *w > 5.0 && rnd() < 0.4 { 2 } else { 1 };
+            for j in 0..count {
+                let sv = if count == 1 { *s + (rnd() - 0.5) * (*w * 0.3) } else { *s + (j as f32 - 0.5) * *w * 0.5 };
+                let dw = (1.7f32).min(*w * 0.42);
+                if dw < 0.9 {
+                    continue;
+                }
+                let y = if awning { 1.55 } else { 1.75 + rnd() * 0.3 };
+                let p = at(sv, 0.035);
+                let k = decal_pools[gi].pick(p);
+                let li = decal_pools[gi].ix[k];
+                signs.push(Sign { x: p[0], z: p[1], y, yaw: face_yaw, w: dw, h: dw * 0.55 / 1.7, label: li, vertical: false, mount: 1 });
+                n_decal += 1;
+            }
+        }
+        // Standing light box on the pavement by the door.
+        let p_stand = match g { "food" => 0.42, "cafe" => 0.36, "bar" => 0.4, "retail" => 0.12, _ => 0.18 };
+        if rnd() < p_stand {
+            let side = if rnd() < 0.5 { -1.0 } else { 1.0 };
+            let sv = sclamp(*s + side * (*w * 0.5 - 0.45), 0.5, len - 0.5);
+            let p = at(sv, 1.05);
+            let k = stand_pools[gi].pick(p);
+            let li = stand_pools[gi].ix[k];
+            signs.push(Sign { x: p[0], z: p[1], y: 0.06 + 1.05 * 0.5, yaw: dir[0].atan2(dir[1]), w: 0.58, h: 1.05, label: li, vertical: true, mount: 3 });
+            n_stand += 1;
+        }
+    }
+    eprintln!("shop fronts: {} (decals {}, awnings {}, standing boards {})", fronts.len(), n_decal, n_awning, n_stand);
     // Rooftop billboards on taller buildings along major roads.
     let mut cand: Vec<(f32, usize, usize)> = Vec::new();
     for (bi, b) in buildings.iter().enumerate() {
@@ -936,6 +1078,7 @@ fn main() {
             h: hh,
             label: li,
             vertical: false,
+                mount: 0,
         });
         boards += 1;
     }
@@ -947,7 +1090,7 @@ fn main() {
         }
         let (fx, fz) = (e.yaw.sin(), e.yaw.cos());
         let li = push_label(&mut labels, Label { kind: "exit", cat: "exit".into(), brand: e.exit_no.to_string(), fg: "", bg: "", w: 1.9, h: 0.6, seed: e.exit_no as u64, floor: 0, tenants: vec![] });
-        signs.push(Sign { x: e.x - fx * 2.33, y: 3.2, z: e.z - fz * 2.33, yaw: e.yaw + std::f32::consts::PI, w: 1.9, h: 0.6, label: li, vertical: false });
+        signs.push(Sign { x: e.x - fx * 2.33, y: 3.2, z: e.z - fz * 2.33, yaw: e.yaw + std::f32::consts::PI, w: 1.9, h: 0.6, label: li, vertical: false, mount: 0 });
     }
 
     let map = MapData { origin_lat: lat0, origin_lon: lon0, buildings, roads, entrances, signs };

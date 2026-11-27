@@ -171,6 +171,7 @@ export function phone(r) {
   return r.chance(0.6) ? `02-0${d(3)}-${d(4)}` : `010-0${d(3)}-${d(4)}`;
 }
 
+const lum = (h) => { const n = parseInt(h.slice(1), 16); return (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255; };
 const isLatin = (t) => !/[ㄱ-힝぀-ヿ一-鿿฀-๿]/.test(t);
 const tr = (r) => r.pick(TR);
 
@@ -448,15 +449,21 @@ function shade(hex, k) {
 }
 
 // ---------------------------------------------------------------- designs
+// Construction types seen on Korean streets (weights per trade vibe):
+//   flex    : printed, internally lit light box (most common, older shops)
+//   galva   : painted / brushed metal panel with 3D letters (갈바 + 입체문자)
+//   channel : individual LED channel letters on the wall or on a raceway
+//   neon    : neon tubes (bars)
+//   sheet   : cut-vinyl lettering on upper-floor windows
 const STYLE_W = {
   fascia: {
-    trad: [['flex', 70], ['galva', 20], ['channel', 10]],
-    snack: [['flex', 80], ['channel', 20]],
-    night: [['flex', 60], ['channel', 25], ['neon', 15]],
-    pro: [['flex', 78], ['channel', 14], ['galva', 8]],
-    beauty: [['galva', 35], ['channel', 40], ['flex', 25]],
-    cafe: [['galva', 40], ['channel', 40], ['flex', 15], ['neon', 5]],
-    latin: [['galva', 35], ['channel', 35], ['neon', 15], ['flex', 15]],
+    trad: [['flex', 50], ['galva', 30], ['channel', 20]],
+    snack: [['flex', 68], ['channel', 20], ['galva', 12]],
+    night: [['flex', 45], ['channel', 28], ['neon', 15], ['galva', 12]],
+    pro: [['flex', 52], ['channel', 26], ['galva', 22]],
+    beauty: [['galva', 42], ['channel', 40], ['flex', 18]],
+    cafe: [['galva', 46], ['channel', 38], ['flex', 10], ['neon', 6]],
+    latin: [['galva', 38], ['channel', 34], ['neon', 14], ['flex', 14]],
   },
   upper: {
     trad: [['flex', 60], ['sheet', 40]],
@@ -470,10 +477,40 @@ const STYLE_W = {
 };
 
 const SUBS_KO = ['포장 · 배달', '24시', '연중무휴', '홍대점', '본점', '2호점', '단체석 완비', '예약 환영', '주차 가능'];
+// Seal stamps on traditional Korean restaurants (낙관 style).
+const SEAL_TXT = ['元祖', '本家', '名家', '味', '福', '眞味', '家', '正直', '一品', '老鋪', '手製', '傳統'];
+// Storefront cladding colours (aluminium composite panels around the glass).
+const CLAD = ['#F2F2EF', '#E4E4E1', '#2B2E33', '#3A3F44', '#1F2226', '#8A8F94', '#5C4033', '#C9C3B6'];
 
 function emblemFor(icon, pal) {
   const eb = pal[2] && pal[2] !== pal[0] ? pal[2] : '#FFFFFF';
-  return { glyph: icon, bg: eb, ring: pal[1] === eb ? pal[0] : pal[1] };
+  return { type: 'badge', glyph: icon, bg: eb, fg: pal[1] === eb ? pal[0] : pal[1], ring: pal[1] === eb ? pal[0] : pal[1] };
+}
+
+const initial = (t) => {
+  const s = t.replace(/^(카페|cafe|Cafe|The|THE)\s+/, '').trim();
+  return isLatin(s) ? s[0].toUpperCase() : [...s][0];
+};
+
+// Logo mark for a shop: a symbol beside the name instead of plain text only.
+// fg/bg are the colours it sits on (sign face colour, letter colour).
+function markFor(r, cat, name, latin, face, ink, accent) {
+  const info = CAT[cat] || CAT.restaurant;
+  const icon = info.i.length ? r.pick(info.i) : null;
+  const v = info.v;
+  const k = r();
+  const acc = accent && accent !== face ? accent : ink;
+  if (v === 'trad' && k < 0.4) return { type: 'seal', text: r.pick(SEAL_TXT), bg: '#B5121B', fg: '#FFF4E6' };
+  if (latin && k < 0.45) return { type: 'mono', letter: initial(name), shape: r.pick(['circle', 'circle', 'hex', 'shield', 'diamond', 'ring2']), fg: ink, font: r.pick(['700 Playfair Display', 'Abril Fatface', '800 Montserrat', 'Archivo Black', 'Pacifico']) };
+  if (!icon) return null;
+  if (v === 'pro') return r.chance(0.6) ? { type: 'tile', glyph: icon, bg: acc, fg: face } : { type: 'mono', letter: initial(name), shape: r.pick(['circle', 'hex']), fg: ink, font: '900 Noto Sans KR' };
+  if (v === 'night') return r.chance(0.5) ? { type: 'tile', glyph: icon, bg: acc, fg: face } : { type: 'picto', glyph: icon, fg: acc };
+  if (v === 'cafe' || v === 'beauty') return r.pick([{ type: 'picto', glyph: icon, fg: ink }, { type: 'badge', glyph: icon, bg: face, fg: ink, ring: ink }, { type: 'roundel', glyph: icon, bg: face, fg: ink, ring: ink, ringText: (latin ? name.toUpperCase() : '') }]);
+  return r.pick([{ type: 'badge', glyph: icon, bg: acc === ink ? '#FFFFFF' : acc, fg: acc === ink ? face : ink, ring: ink }, { type: 'tile', glyph: icon, bg: acc, fg: face }, { type: 'picto', glyph: icon, fg: acc }]);
+}
+
+function pills(r, pal) {
+  return r.chance(0.35) ? (pal[2] && pal[2] !== pal[0] ? pal[2] : shade(pal[0], 0.7)) : null;
 }
 
 export function makeDesign(req, index) {
@@ -481,11 +518,18 @@ export function makeDesign(req, index) {
   const kind = req.k;
   const cat = req.c === 'brand' ? 'brand' : CAT[req.c] ? req.c : 'restaurant';
   const info = CAT[cat] || CAT.restaurant;
-  const d = { i: index, kind, cat, w: req.w, h: req.h, sub: [], emblem: null, off: 0, box: null, fb: 'ko' };
+  const d = { i: index, kind, cat, w: req.w, h: req.h, sub: [], mark: null, off: 0, box: null, fb: 'ko' };
 
   if (kind === 'board') return boardDesign(req, r, d);
   if (kind === 'banner') return bannerDesign(r, d);
   if (kind === 'stack') return stackDesign(req, r, d);
+  if (kind === 'decal') return decalDesign(req, r, d);
+  if (kind === 'stand') return standDesign(req, r, d);
+  if (kind === 'awning') return awningDesign(req, r, d);
+  if (kind === 'disc') return discDesign(req, r, d);
+  if (kind === 'band') return bandDesign(req, r, d);
+  if (kind === 'cross') return crossDesign(d);
+  if (cat === 'church' && kind !== 'vert') return churchDesign(req, r, d);
   if (kind === 'exit') {
     // Generic metro exit sign (no operator logo): number tile + 출구.
     Object.assign(d, { style: 'exit', text: `${req.t} 출구`, no: req.t, glow: 'face', box: { color: '#2A2E36', depth: 0.12 } });
@@ -516,30 +560,55 @@ export function makeDesign(req, index) {
 
   if (style === 'flex') {
     const pal = r.pick(info.v === 'pro' ? PRO : info.v === 'night' ? NIGHT : FLEX);
-    d.bg = { type: weighted(r, [['solid', 50], ['vgrad', 25], ['band', 25]]), c1: pal[0], c2: r.chance(0.5) ? shade(pal[0], 0.78) : pal[2] };
-    d.main = { text: nm.main, font: mainFont, color: pal[1], stroke: r.chance(0.3) ? shade(pal[0], 0.45) : null, shadow: r.chance(0.25) };
-    if (icon && r.chance(info.v === 'pro' ? 0.35 : 0.5)) d.emblem = emblemFor(icon, pal);
+    d.bg = { type: weighted(r, [['solid', 45], ['vgrad', 25], ['band', 20], ['panel', 10]]), c1: pal[0], c2: r.chance(0.5) ? shade(pal[0], 0.78) : pal[2] };
+    d.main = { text: nm.main, font: mainFont, color: pal[1], stroke: r.chance(0.3) ? shade(pal[0], 0.45) : null, shadow: r.chance(0.3) };
+    if (r.chance(info.v === 'pro' ? 0.5 : 0.62)) d.mark = markFor(r, cat, nm.main, latin, pal[0], pal[1], pal[2]);
+    // Split face: a colour block at one end carrying the mark.
+    if (d.mark && r.chance(0.3)) {
+      const blk = pal[2] && pal[2] !== pal[0] ? pal[2] : shade(pal[0], 0.7);
+      d.split = { c: blk, k: 1.35 };
+      d.mark = markFor(r, cat, nm.main, latin, blk, pal[0] === blk ? pal[1] : pal[0], pal[1]);
+    }
     const subs = [nm.sub || menu || r.pick(SUBS_KO), r.chance(0.6) ? phone(r) : r.pick(SUBS_KO)];
-    const n = r.chance(0.75) ? (r.chance(0.5) ? 2 : 1) : 0;
-    for (let k = 0; k < n; k++) d.sub.push({ text: subs[k], color: k === 0 ? pal[1] : pal[2] === pal[0] ? pal[1] : pal[2], font: r.pick(['700 Noto Sans KR', '500 Noto Sans KR', '700 Gothic A1']) });
-    d.layout = r.pick(['right', 'below', 'right', 'band']);
+    const n = r.chance(0.78) ? (r.chance(0.5) ? 2 : 1) : 0;
+    const pill = pills(r, pal);
+    for (let k = 0; k < n; k++) d.sub.push({ text: subs[k], color: k === 0 ? pal[1] : pal[2] === pal[0] ? pal[1] : pal[2], font: r.pick(['700 Noto Sans KR', '500 Noto Sans KR', '700 Gothic A1']), pill: k === 1 && pill ? pill : null });
+    d.layout = d.split ? r.pick(['right', 'below']) : r.pick(['right', 'below', 'right', 'band']);
+    if (r.chance(0.22) && d.layout !== 'band') d.stripes = [{ c: pal[2] === pal[0] ? shade(pal[0], 0.6) : pal[2], t: 0.06 }];
     d.box = { color: r.chance(0.5) ? BOX_ALU : shade(pal[0], 0.55), depth: upper ? 0.16 : 0.22 };
+    if (!upper && r.chance(0.2)) d.box.frame = r.pick(CLAD);
     d.glow = 'face';
   } else if (style === 'galva') {
+    // Painted or brushed panel with raised letters (often back-lit or front-lit).
     const pal = r.pick(GALVA);
-    d.bg = { type: 'solid', c1: pal[0] };
-    d.main = { text: nm.main, font: mainFont, color: pal[1], metal: r.chance(0.5), spacing: latin ? r.int(2, 10) : r.int(0, 4) };
+    const minimal = (info.v === 'cafe' || info.v === 'beauty' || latin) && r.chance(0.35);
+    d.bg = minimal ? { type: 'panel', c1: r.pick(['#F4F2EC', '#FFFFFF', '#EDEAE3']) } : { type: weighted(r, [['brushed', 40], ['panel', 45], ['wood', 15]]), c1: pal[0] };
+    if (d.bg.type === 'wood') d.bg.c1 = r.pick(['#8A5A33', '#A0703F', '#6B4426', '#C49A62']);
+    const ink = minimal ? r.pick(['#1A1A1A', '#2B2B2B', '#3B2F2F', '#1F3A5F']) : d.bg.type === 'wood' ? r.pick(['#F3E6C4', '#1A1410', '#FFFFFF']) : pal[1];
+    d.main = { text: nm.main, font: mainFont, color: ink, metal: !minimal && r.chance(0.45), spacing: latin ? r.int(2, 10) : r.int(0, 4) };
+    d.main.extrude = { k: minimal ? 0.03 : 0.05, color: shade(ink === '#FFFFFF' || ink === '#F3E6C4' ? '#9A9A96' : ink, 0.55) };
+    if (!minimal && r.chance(0.3)) d.main.halo = r.pick(['#FFF4D6', '#FFFFFF', '#CFE8FF']);
     const sub = nm.sub || (latin ? r.pick(['since ' + r.int(1998, 2023), 'EST. ' + r.int(2005, 2023), menu || '']) : menu);
-    if (sub && r.chance(0.6)) d.sub.push({ text: sub, color: pal[1], font: isLatin(sub) ? r.pick(FONTS.enMin) : '500 Noto Sans KR', spacing: 4 });
+    if (sub && r.chance(0.6)) d.sub.push({ text: sub, color: ink, font: isLatin(sub) ? r.pick(FONTS.enMin) : '500 Noto Sans KR', spacing: 4 });
+    if (r.chance(minimal ? 0.75 : 0.55)) d.mark = markFor(r, cat, nm.main, latin, d.bg.c1, ink, null);
     d.layout = r.pick(['below', 'center', 'center']);
-    d.box = { color: pal[0], depth: 0.06 };
-    d.glow = r.chance(0.35) ? 'letters' : 'none';
+    d.box = { color: d.bg.type === 'wood' ? '#4A3020' : d.bg.c1, depth: 0.08 };
+    if (!upper && r.chance(0.4)) d.box.frame = minimal ? r.pick(['#F2F2EF', '#2B2E33', '#E4E4E1']) : r.pick(CLAD);
+    d.glow = d.main.halo ? 'halo' : r.chance(0.4) ? 'letters' : 'none';
   } else if (style === 'channel') {
+    // LED channel letters: coloured faces, deep returns, optional raceway.
     const col = r.pick(CHANNEL);
     d.bg = { type: 'none' };
-    d.main = { text: nm.main, font: mainFont, color: col, ret: shade(col === '#111111' ? '#555555' : col, 0.5) };
-    d.raceway = r.chance(0.55) ? r.pick(['#2B2B2B', '#8A8F94', '#D9D4C7', shade(col, 0.4)]) : null;
+    const ret = col === '#111111' ? '#4A4A4A' : col === '#FFFFFF' ? '#9C9C9C' : shade(col, 0.5);
+    d.main = { text: nm.main, font: mainFont, color: col, stroke: shade(ret, 0.8), strokeW: 0.02, extrude: { k: 0.05, color: ret } };
+    d.raceway = r.chance(0.45) ? r.pick(['#2B2B2B', '#8A8F94', '#D9D4C7', shade(col, 0.4)]) : null;
     if (nm.sub && r.chance(0.5)) d.sub.push({ text: nm.sub, color: col, font: isLatin(nm.sub) ? r.pick(FONTS.enMin) : '700 Noto Sans KR' });
+    if (r.chance(0.45)) {
+      const mk = markFor(r, cat, nm.main, latin, lum(col) > 0.6 ? '#1A1A1A' : '#FFFFFF', col, null);
+      // Cut-out marks must be solid shapes (no see-through holes on the wall).
+      if (mk && mk.type !== 'picto') mk.solid = true;
+      d.mark = mk;
+    }
     d.layout = d.sub.length ? 'below' : 'center';
     d.off = 0.14;
     d.glow = 'letters';
@@ -548,6 +617,7 @@ export function makeDesign(req, index) {
     d.bg = r.chance(0.6) ? { type: 'solid', c1: r.pick(['#0B0B10', '#111317', '#1A0E14', '#0E1418']) } : { type: 'none' };
     d.main = { text: nm.main, font: latin ? r.pick(FONTS.enNeon) : r.pick([...FONTS.round, ...FONTS.headline]), color: tube, neon: true };
     if (latin && r.chance(0.4)) d.sub.push({ text: r.pick(['OPEN', 'BAR', 'LIVE', 'PUB']), color: r.pick(NEON), font: r.pick(FONTS.enNeon), neon: true });
+    if (icon && r.chance(0.4)) d.mark = { type: 'neon', glyph: icon, fg: r.pick(NEON) };
     d.layout = 'center';
     d.box = d.bg.type === 'none' ? null : { color: d.bg.c1, depth: 0.05 };
     d.off = d.bg.type === 'none' ? 0.16 : 0.08;
@@ -559,6 +629,7 @@ export function makeDesign(req, index) {
     d.main = { text: nm.main, font: latin ? r.pick(FONTS.enBold) : r.pick([...FONTS.gothic, ...FONTS.headline]), color: col, stroke: r.chance(0.4) ? '#1A1A1A' : null };
     if (r.chance(0.75)) d.sub.push({ text: r.chance(0.6) ? phone(r) : menu || phone(r), color: r.chance(0.5) ? col : '#FFFFFF', font: r.pick(['700 Noto Sans KR', 'Do Hyeon', 'Black Han Sans']) });
     if (r.chance(0.35)) d.floorTag = { text: `${(req.f || 1) + 1}F`, color: col };
+    if (icon && r.chance(0.35)) d.mark = { type: 'picto', glyph: icon, fg: col };
     d.layout = r.pick(['below', 'right']);
     d.off = 0.22;
     d.glow = 'none';
@@ -576,10 +647,15 @@ function japaneseDesign(r, d, nm, icon, upper) {
   d.bg = { type: look === 'wood' ? 'wood' : look === 'noren' ? 'noren' : 'band', c1: pal[0], c2: pal[2] };
   d.main = { text: nm.main, font: r.pick(look === 'white' ? [...FONTS.jaGothic, ...FONTS.jaBrush] : [...FONTS.jaBrush, ...FONTS.jaMincho]), color: pal[1] };
   d.sub.push({ text: nm.sub, color: pal[1], font: r.pick(['700 Noto Sans KR', '700 Noto Serif KR']) });
-  if (icon && r.chance(0.5)) d.emblem = { glyph: icon === '🍣' || icon === '🍜' ? icon : '🍶', bg: '#B5121B', ring: '#F4EFE6' };
+  if (r.chance(0.6)) {
+    d.mark = icon && r.chance(0.5)
+      ? { type: 'badge', glyph: icon === '🍣' || icon === '🍜' ? icon : '🍶', bg: '#B5121B', fg: '#F4EFE6', ring: '#F4EFE6' }
+      : { type: 'seal', text: r.pick(['味', '本', '和', '亭', '旨']), bg: '#B5121B', fg: '#F4EFE6' };
+  }
   d.layout = 'below';
   d.fb = 'ja';
   d.box = { color: look === 'wood' ? '#5A3E22' : shade(pal[0], 0.6), depth: d.style === 'galva' ? 0.08 : 0.2 };
+  if (!upper && r.chance(0.35)) d.box.frame = look === 'wood' ? '#3A2A1A' : '#1F2226';
   d.glow = d.style === 'galva' ? (r.chance(0.5) ? 'letters' : 'none') : 'face';
   return d;
 }
@@ -595,6 +671,7 @@ function koChineseDesign(r, d, nm, menu, upper) {
   d.fb = hanjaBig ? 'zhT' : 'ko';
   d.sub.push({ text: hanjaBig ? nm.main : nm.sub, color: pal[1], font: hanjaBig ? '700 Noto Sans KR' : r.pick(FONTS.zhT), fb: hanjaBig ? 'ko' : 'zhT' });
   if (menu && r.chance(0.6)) d.sub.push({ text: menu, color: pal[1], font: '700 Noto Sans KR' });
+  if (r.chance(0.55)) d.mark = r.chance(0.5) ? { type: 'badge', glyph: '🥟', bg: pal[1], fg: pal[0], ring: pal[1] } : { type: 'seal', text: r.pick(['福', '龍', '囍', '中華']), bg: pal[1] === '#FFFFFF' ? '#FFD34D' : pal[1], fg: pal[0] };
   d.layout = r.pick(['right', 'below']);
   d.box = { color: shade(pal[0], 0.55), depth: upper ? 0.16 : 0.22 };
   d.glow = 'face';
@@ -608,6 +685,7 @@ function chineseDesign(r, d, nm, upper) {
   d.bg = { type: r.chance(0.5) ? 'band' : 'solid', c1: pal[0], c2: pal[2] };
   d.main = { text: nm.main, font: r.pick(FONTS.zhS), color: pal[1] };
   d.sub.push({ text: nm.sub, color: pal[1], font: '900 Noto Sans KR' });
+  if (r.chance(0.5)) d.mark = { type: 'badge', glyph: '🌶️', bg: pal[1], fg: pal[0], ring: pal[1] };
   d.layout = 'right';
   d.fb = 'zhS';
   d.box = { color: shade(pal[0], 0.55), depth: upper ? 0.16 : 0.22 };
@@ -626,7 +704,7 @@ function worldDesign(r, d, nm, icon, upper) {
   }[nm.flavor];
   const pal = r.pick(P);
   d.style = upper ? 'flex' : r.chance(0.5) ? 'flex' : 'galva';
-  d.bg = { type: d.style === 'flex' ? r.pick(['band', 'solid']) : 'solid', c1: pal[0], c2: pal[2] };
+  d.bg = { type: d.style === 'flex' ? r.pick(['band', 'solid']) : 'panel', c1: pal[0], c2: pal[2] };
   let font;
   if (nm.script === 'th') font = r.pick(FONTS.th);
   else if (nm.script === 'ko') font = r.pick(FONTS.headline);
@@ -634,40 +712,145 @@ function worldDesign(r, d, nm, icon, upper) {
   else if (nm.flavor === 'vi') font = r.pick(['700 Montserrat', 'Lobster', '700 Playfair Display']);
   else font = r.pick([...FONTS.enSerif, ...FONTS.enScript]);
   d.main = { text: nm.main, font, color: pal[1] };
+  if (d.style === 'galva') d.main.extrude = { k: 0.04, color: shade(pal[1], 0.55) };
   d.sub.push({ text: nm.sub, color: pal[1], font: /[฀-๿]/.test(nm.sub) ? '700 Kanit' : '700 Noto Sans KR', fb: /[฀-๿]/.test(nm.sub) ? 'th' : 'ko' });
-  if (icon && r.chance(0.4)) d.emblem = emblemFor(icon, pal);
+  if (icon && r.chance(0.5)) d.mark = r.chance(0.5) ? emblemFor(icon, pal) : { type: 'mono', letter: initial(nm.main), shape: 'circle', fg: pal[1], font: '700 Playfair Display' };
+  if (nm.flavor === 'it' && r.chance(0.5)) d.stripes = [{ c: '#1F5E3B', t: 0.05 }, { c: '#F7F3EA', t: 0.05 }, { c: '#C8102E', t: 0.05 }];
   d.layout = 'below';
   d.box = { color: shade(pal[0], 0.55), depth: d.style === 'galva' ? 0.06 : 0.2 };
+  if (!upper && r.chance(0.3)) d.box.frame = r.pick(CLAD);
   d.glow = d.style === 'galva' ? 'letters' : 'face';
   return d;
 }
 
-// Real chains (parody names). Foreign brands keep their Latin-script look.
+// ---------------------------------------------------------------- brands
+// Parody chains keep the real shop-front grammar: logo placement, panel
+// colour, accent stripes and the cladding around the glass (brand-bible.md).
+//   parts: wordmark pieces with their own colours; mark: logo symbol;
+//   stripes: accent bands at the bottom of the fascia; frame: cladding colour.
+const BRAND_STYLE = {
+  GG24: { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['GG24', '#1C5DB8']], font: 'Archivo Black', dot: '#3EC1E8', sub: ['LIFESTYLE PLATFORM', '#5A6470', '600 Montserrat'], stripes: [{ c: '#6B4A2B', t: 0.045 }, { c: '#1C5DB8', t: 0.09 }], frame: '#F4F5F6' },
+  CUZ: { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['C', '#652F8D'], ['U', '#A6CE39'], ['Z', '#652F8D']], font: 'Archivo Black', stripes: [{ c: '#A6CE39', t: 0.05 }, { c: '#652F8D', t: 0.09 }], frame: '#F2F2F2' },
+  // The real store's fascia: orange / green / red bands running the full width,
+  // the logo in a white box in the middle.
+  식스텐: { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['SIX-TEN', '#008C45']], font: 'Archivo Black', layout: 'bands7', bands: ['#F58220', '#008C45', '#E4002B'], mark: { type: 'six', fg: '#F58220', fg2: '#E4002B', text: 'SIX-TEN', ink: '#008C45' }, frame: '#F4F5F6' },
+  스타덕스: { bg: { type: 'brushed', c1: '#25292C' }, parts: [['STARDUCKS', '#FFFFFF']], font: '700 Montserrat', spacing: 14, mark: { type: 'roundel', draw: 'duck', bg: '#00704A', fg: '#FFFFFF', ring: '#00704A', ringText: 'STARDUCKS', ringText2: 'COFFEE' }, frame: '#2A2F33', glow: 'letters' },
+  기가커피: { bg: { type: 'panel', c1: '#FFD400' }, parts: [['GIGA COFFEE', '#2B1A10']], font: 'Archivo Black', sub: ['기가커피', '#2B1A10', '900 Noto Sans KR'], frame: '#2B1A10' },
+  빡다방: { bg: { type: 'panel', c1: '#FFE600' }, parts: [['빡다방', '#1B3A8F']], font: 'Black Han Sans', sub: ["PPAK'S COFFEE", '#1B3A8F', '800 Montserrat'], mark: { type: 'tile', glyph: '☕', bg: '#1B3A8F', fg: '#FFE600' }, frame: '#1B3A8F' },
+  올리브올드: { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['OLIVE OLD', '#8DB51E']], font: '700 Montserrat', spacing: 6, mark: { type: 'leaf', fg: '#8DB51E' }, frame: '#EEF3E2' },
+  다사소: { bg: { type: 'panel', c1: '#E60012' }, parts: [['DASASO', '#FFFFFF']], font: 'Archivo Black', sub: ['다사소', '#FFFFFF', '900 Noto Sans KR'], frame: '#B5000E' },
+  라떼리아: { bg: { type: 'panel', c1: '#DA291C' }, parts: [['LATTERIA', '#FFFFFF']], font: 'Archivo Black', mark: { type: 'badge', glyph: '🍔', bg: '#FFFFFF', fg: '#DA291C', ring: '#FFFFFF' }, frame: '#A51E14' },
+  기겁떡볶이: { bg: { type: 'panel', c1: '#141414' }, parts: [['기겁', '#FF2A2A'], ['떡볶이', '#FFFFFF']], font: 'Black Han Sans', mark: { type: 'tile', glyph: '🌶️', bg: '#E01B1B', fg: '#FFFFFF' }, stripes: [{ c: '#E01B1B', t: 0.08 }], frame: '#1A1A1A' },
+  인생여덟컷: { bg: { type: 'panel', c1: '#111111' }, parts: [['인생여덟컷', '#FFFFFF']], font: '900 Noto Sans KR', mark: { type: 'film', fg: '#FFFFFF' }, frame: '#111111' },
+  너희은행: { bg: { type: 'panel', c1: '#0067AC' }, parts: [['너희은행', '#FFFFFF']], font: '900 Noto Sans KR', mark: { type: 'sun', fg: '#FFFFFF', acc: '#5BC2E7' }, frame: '#E9EDF1' },
+  SQ텔레콤: { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['SQ', '#EA002C'], ['텔레콤', '#3A3A3A']], font: '900 Noto Sans KR', mark: { type: 'tile', glyph: '📱', bg: '#EA002C', fg: '#FFFFFF' }, frame: '#F2F2F2' },
+  QT: { bg: { type: 'panel', c1: '#1A1A1A' }, parts: [['QT', '#FF3B30']], font: 'Archivo Black', sub: ['플라자', '#FFFFFF', '700 Noto Sans KR'], frame: '#1A1A1A' },
+  'LZ U-': { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['LZ U', '#E6007E'], ['-', '#333333']], font: 'Archivo Black', frame: '#F2F2F2' },
+  CZV: { bg: { type: 'panel', c1: '#E71A0F' }, parts: [['CZV', '#FFFFFF']], font: 'Archivo Black', frame: '#B5150C' },
+  기가박스: { bg: { type: 'panel', c1: '#351F66' }, parts: [['GIGABOX', '#FFFFFF']], font: '800 Montserrat', spacing: 6, frame: '#2A1852' },
+  라떼시네마: { bg: { type: 'panel', c1: '#ED1C24' }, parts: [['LATTE CINEMA', '#FFFFFF']], font: '800 Montserrat', frame: '#B5151B' },
+  뭐신사: { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['MWOSINSA', '#111111']], font: '800 Montserrat', spacing: 10, frame: '#E8E8E6' },
+  '뭐신사 스탠다드': { bg: { type: 'panel', c1: '#F4F4F2' }, parts: [['MWOSINSA STANDARD', '#111111']], font: '700 Montserrat', spacing: 8, frame: '#E8E8E6' },
+  또롱이: { bg: { type: 'panel', c1: '#3BAA34' }, parts: [['또롱이', '#FFFFFF']], font: 'Jua', mark: { type: 'badge', glyph: '🚲', bg: '#FFFFFF', fg: '#3BAA34', ring: '#FFFFFF' }, frame: null },
+};
+
 function brandDesign(req, r, d) {
   if (d.kind === 'vert') return vertDesign(r, d, 'night', req);
+  const sp = BRAND_STYLE[req.t];
   const lat = BRAND_LATIN[req.t];
-  const main = lat ? lat[0] : req.t;
-  d.text = lat ? `${main} ${req.t}` : req.t;
+  d.dens = 1.4; // few signs, seen up close: render sharper
+  if (!sp) {
+    // Group renames (라떼마트, 신세기백화점 ...): panel + wordmark in the group colours.
+    const main = lat ? lat[0] : req.t;
+    d.text = lat ? `${main} ${req.t}` : req.t;
+    d.style = 'flex';
+    d.bg = { type: 'panel', c1: req.bg };
+    d.main = { text: main, font: isLatin(main) ? r.pick(['Archivo Black', '800 Montserrat']) : r.pick(['Black Han Sans', '900 Noto Sans KR']), color: req.fg, spacing: isLatin(main) ? 2 : 0 };
+    const sub = lat && lat[1] ? lat[1] : r.chance(0.5) ? r.pick(['홍대점', '홍대입구역점']) : null;
+    if (sub) d.sub.push({ text: sub, color: req.fg, font: isLatin(sub) ? '600 Montserrat' : '700 Noto Sans KR', spacing: isLatin(sub) ? 6 : 0 });
+    d.layout = sub ? 'below' : 'center';
+    d.box = { color: shade(req.bg, 0.6), depth: 0.22, frame: shade(req.bg, 0.75) };
+    d.glow = 'face';
+    return d;
+  }
+  const text = sp.parts.map((p) => p[0]).join('');
+  d.text = text === req.t ? text : `${text} ${req.t}`;
   d.style = 'flex';
-  d.bg = { type: r.chance(0.3) ? 'vgrad' : 'solid', c1: req.bg, c2: shade(req.bg, 0.8) };
-  d.main = { text: main, font: isLatin(main) ? r.pick(['Archivo Black', '800 Montserrat', 'Anton']) : r.pick(['Black Han Sans', '900 Noto Sans KR']), color: req.fg, spacing: isLatin(main) ? 2 : 0 };
-  const sub = lat && lat[1] ? lat[1] : r.chance(0.5) ? r.pick(['홍대점', '홍대입구역점', '24시']) : null;
-  if (sub) d.sub.push({ text: sub, color: req.fg, font: isLatin(sub) ? '600 Montserrat' : '700 Noto Sans KR', spacing: isLatin(sub) ? 6 : 0 });
-  d.layout = sub ? 'below' : 'center';
-  d.box = { color: shade(req.bg, 0.6), depth: 0.22 };
+  d.bg = { ...sp.bg };
+  d.main = { text, parts: sp.parts.map(([t, c]) => ({ text: t, color: c })), font: sp.font, color: sp.parts[0][1], spacing: sp.spacing || (isLatin(text) ? 2 : 0) };
+  if (d.bg.type === 'brushed') d.main.extrude = { k: 0.035, color: '#8E9396' };
+  if (sp.sub) d.sub.push({ text: sp.sub[0], color: sp.sub[1], font: sp.sub[2], spacing: isLatin(sp.sub[0]) ? 6 : 0 });
+  d.mark = sp.mark ? { ...sp.mark } : null;
+  d.dot = sp.dot || null;
+  d.stripes = sp.stripes || null;
+  d.layout = sp.layout || (d.sub.length ? 'below' : 'center');
+  d.bands = sp.bands || null;
+  d.box = { color: d.bg.type === 'brushed' ? '#1E2124' : shade(d.bg.c1, 0.85), depth: 0.2, frame: sp.frame || null };
+  d.glow = sp.glow || 'face';
+  return d;
+}
+
+// Window band of the convenience chains (repeated logo + goods, printed
+// light box over the glass). Drawn as a horizontal tile.
+const CVS_BAND = {
+  식스텐: { mark: { type: 'six', fg: '#F58220', fg2: '#E4002B', text: 'SIX-TEN', ink: '#008C45' }, name: '식스텐', goods: '삼각김밥', glyph: '🍙', ink: '#3A3A3A', bg: '#F2F1EC' },
+  GG24: { mark: { type: 'tile', letter: 'G', font: 'Archivo Black|latin', bg: '#1C5DB8', fg: '#FFFFFF' }, name: 'GG24', goods: '도시락 · 원두커피', glyph: '☕', ink: '#1C5DB8', bg: '#FFFFFF' },
+  CUZ: { mark: { type: 'tile', letter: 'C', font: 'Archivo Black|latin', bg: '#652F8D', fg: '#A6CE39' }, name: 'CUZ', goods: '택배 · ATM', glyph: '📦', ink: '#652F8D', bg: '#FFFFFF' },
+};
+function bandDesign(req, r, d) {
+  const b = CVS_BAND[req.t] || CVS_BAND['식스텐'];
+  Object.assign(d, { style: 'band', w: 3.4, text: `${b.name} ${b.goods}`, band: b, tile: true, dens: 1.2, box: { color: '#D9D9D4', depth: 0.1 }, glow: 'face' });
+  return d;
+}
+
+// Churches: white board with a cross and the name in dark navy; the rooftop
+// carries a red neon cross.
+const CHURCH = ['사랑', '은혜', '소망', '새생명', '순복음', '빛과소금', '열린', '하늘', '평강', '임마누엘'];
+function churchDesign(req, r, d) {
+  const name = `${r.pick(CHURCH)}교회`;
+  d.style = 'flex';
+  d.text = name;
+  d.bg = { type: 'panel', c1: r.pick(['#F6F5F0', '#FFFFFF', '#EEF1F5']) };
+  const ink = r.pick(['#1B2A5B', '#222222', '#3A2A6B']);
+  d.main = { text: name, font: r.pick(['900 Noto Serif KR', '800 Nanum Myeongjo', '900 Noto Sans KR']), color: ink };
+  d.mark = { type: 'cross', fg: ink };
+  if (r.chance(0.6)) d.sub.push({ text: r.pick(['주일예배 오전 11시', '대한예수교장로회', '기독교대한감리회', '새벽기도 05:30']), color: ink, font: '500 Noto Sans KR' });
+  d.layout = d.sub.length ? 'below' : 'center';
+  d.box = { color: '#C9CCD1', depth: 0.12 };
+  d.glow = 'face';
+  return d;
+}
+
+function crossDesign(d) {
+  Object.assign(d, { style: 'cross', text: '십자가', glow: 'letters', box: { color: '#2A2A2A', depth: 0.06, cross: true } });
+  return d;
+}
+
+// Round projecting sign (the coffee chain's blade sign): the roundel alone.
+function discDesign(req, r, d) {
+  const sp = BRAND_STYLE[req.t];
+  d.style = 'disc';
+  d.text = req.t + ' (원형)';
+  d.dens = 1.4;
+  d.mark = sp && sp.mark ? { ...sp.mark } : { type: 'badge', glyph: '☕', bg: req.bg, fg: req.fg, ring: req.fg };
+  d.box = { color: '#2A2F33', depth: 0.1, disc: true };
   d.glow = 'face';
   return d;
 }
 
 function vertDesign(r, d, vibe, brandReq) {
   d.style = 'vflex';
+  if (d.cat === 'church') return Object.assign(d, { text: '교회', bg: { type: 'solid', c1: '#1B2A5B' }, main: { text: r.pick(['사랑교회', '은혜교회', '소망교회', '새생명교회']), font: r.pick(['900 Noto Serif KR', '900 Noto Sans KR']), color: '#FFFFFF' }, mark: { type: 'cross', fg: '#FFFFFF' }, box: { color: '#2A2E36', depth: 0.25 }, glow: 'face' });
   const text = brandReq ? (BRAND_LATIN[brandReq.t]?.[0] ?? brandReq.t) : shortName(d.cat, r);
   d.text = text;
   const pal = brandReq ? [brandReq.bg, brandReq.fg, '#FFFFFF'] : r.pick(vibe === 'pro' ? PRO : vibe === 'night' ? NIGHT : FLEX);
   d.bg = { type: weighted(r, [['solid', 55], ['blocks', 25], ['vgrad', 20]]), c1: pal[0], c2: brandReq ? shade(pal[0], 0.7) : r.chance(0.5) ? pal[2] : shade(pal[0], 0.7) };
   d.main = { text, font: isLatin(text) ? r.pick(FONTS.enBold) : r.pick(FONTS[weighted(r, [['headline', 50], ['gothic', 35], ['serif', 15]])]), color: pal[1], stroke: r.chance(0.25) ? shade(pal[0], 0.45) : null };
   const info = CAT[d.cat];
-  if (!brandReq && info && info.i.length && r.chance(0.4)) d.emblem = { glyph: r.pick(info.i), bg: '#FFFFFF', ring: pal[1] === '#FFFFFF' ? pal[0] : pal[1] };
+  if (!brandReq && info && info.i.length && r.chance(0.55)) {
+    const g = r.pick(info.i);
+    d.mark = r.chance(0.5) ? { type: 'badge', glyph: g, bg: '#FFFFFF', fg: pal[1] === '#FFFFFF' ? pal[0] : pal[1], ring: pal[1] === '#FFFFFF' ? pal[0] : pal[1] } : { type: 'tile', glyph: g, bg: pal[1], fg: pal[0] };
+  }
   if (r.chance(0.25)) d.sub.push({ text: r.pick(['24시', '2F', '3F', 'B1']), color: pal[2] === pal[0] ? pal[1] : pal[2], font: '900 Noto Sans KR' });
   d.box = { color: r.chance(0.5) ? BOX_ALU : shade(pal[0], 0.5), depth: 0.32 };
   d.glow = 'face';
@@ -686,6 +869,7 @@ function stackDesign(req, r, d) {
     return {
       text: name, floor: `${k + 2}F`, bg: pal[0], fg: pal[1], acc: pal[2],
       font: isLatin(name) ? rr.pick(FONTS.enBold) : rr.pick(FONTS[weighted(rr, [['headline', 45], ['gothic', 45], ['serif', 10]])]),
+      glyph: info.i.length && rr.chance(0.5) ? rr.pick(info.i) : null,
     };
   }).reverse();
   d.box = { color: r.pick(['#D9DCDF', BOX_ALU, '#2B2E33']), depth: 0.3 };
@@ -693,14 +877,124 @@ function stackDesign(req, r, d) {
   return d;
 }
 
+// ---------------------------------------------------------------- shop-front extras
+// Window lettering (cut vinyl / LED open signs) per trade group.
+const DECAL = {
+  cafe: [['COFFEE & DESSERT', 'OPEN 10:00 – 22:00'], ['Take out', 'coffee · tea · cake'], ['HAND DRIP', 'specialty coffee'], ['신메뉴', '딸기 라떼 · 말차 라떼'], ['BRUNCH', 'everyday 11 – 15'], ['WIFI · 콘센트', '노트북 환영'], ['FRESH BAKED', 'every morning']],
+  food: [['포장 · 배달', '전화 주문 환영'], ['점심특선', '11:30 – 14:00'], ['국내산', '돼지고기 · 쌀 · 김치'], ['단체석 완비', '최대 40명'], ['영업시간', '11:30 – 22:00'], ['신메뉴 출시', '맛있게 매운맛'], ['혼밥 환영', '1인 메뉴 있음']],
+  bar: [['HAPPY HOUR', '18:00 – 20:00'], ['COCKTAIL', 'whisky · wine'], ['LIVE MUSIC', 'every friday'], ['생맥주', '시원하게 한잔'], ['OPEN', '18:00 – 03:00']],
+  retail: [['SALE', 'UP TO 50%'], ['NEW ARRIVAL', 'F/W collection'], ['TAX FREE', '즉시 환급'], ['OPEN', '11:00 – 22:00'], ['1+1', '전 품목'], ['카드 결제', '현금영수증 발행']],
+  service: [['예약제', '전화 · 네이버 예약'], ['OPEN', '10:00 – 20:00'], ['상담 환영', '편하게 들어오세요'], ['CUT · PERM', 'COLOR · CLINIC'], ['진료시간', '평일 09:00 – 19:00']],
+};
+const VINYL = ['#FFFFFF', '#FFFFFF', '#FFFFFF', '#FFD200', '#F2C9A0', '#E8272C'];
+
+function decalDesign(req, r, d) {
+  const g = DECAL[req.c] ? req.c : 'service';
+  d.cat = g;
+  d.style = 'decal';
+  const led = (g === 'bar' || g === 'food' || g === 'cafe') && r.chance(0.22);
+  if (led) {
+    // LED "OPEN" sign hanging behind the glass.
+    d.led = { text: r.pick(['OPEN', 'OPEN', 'OPEN 24H', 'OPEN']), color: r.pick(['#FF3B30', '#FF4FA3', '#3FE0FF', '#FFE14D']), ring: r.pick(['#3FE0FF', '#FF3B30', '#4CFF7A']) };
+    d.text = d.led.text;
+    d.glow = 'letters';
+    return d;
+  }
+  const [a, b] = r.pick(DECAL[g]);
+  const col = r.pick(VINYL);
+  d.text = `${a} ${b}`;
+  d.main = { text: a, font: isLatin(a) ? r.pick([...FONTS.enBold, ...FONTS.enSerif, ...FONTS.enScript]) : r.pick([...FONTS.gothic, ...FONTS.round]), color: col };
+  d.sub.push({ text: b, color: col, font: isLatin(b) ? r.pick(FONTS.enMin) : '700 Noto Sans KR' });
+  const info = CAT[{ cafe: 'cafe', food: 'restaurant', bar: 'bar', retail: 'clothes', service: 'hair' }[g]];
+  if (r.chance(0.5)) d.mark = { type: 'picto', glyph: r.pick(info.i), fg: col };
+  d.rule = r.chance(0.5);
+  d.glow = 'none';
+  return d;
+}
+
+// Standing light box / chalkboard on the pavement.
+const STAND_MENU = {
+  cafe: [['TODAY', [['아메리카노', '4,500'], ['카페라떼', '5,000'], ['바닐라라떼', '5,500'], ['아이스티', '4,800']]], ['DESSERT', [['치즈케이크', '6,500'], ['크로플', '5,800'], ['마카롱', '2,800']]]],
+  food: [['오늘의 메뉴', [['김치찌개', '9,000'], ['제육볶음', '10,000'], ['된장찌개', '9,000'], ['공기밥', '1,000']]], ['점심특선', [['정식', '9,900'], ['비빔밥', '9,000'], ['냉면', '10,000']]], ['MENU', [['삼겹살', '16,000'], ['목살', '16,000'], ['항정살', '18,000']]]],
+  bar: [['HAPPY HOUR', [['생맥주', '4,000'], ['하이볼', '7,000'], ['칵테일', '9,000']]], ['TONIGHT', [['위스키', '12,000~'], ['와인', '9,000~']]]],
+  retail: [['SALE', [['티셔츠', '9,900'], ['후드', '29,000'], ['청바지', '39,000']]]],
+  service: [['PRICE', [['커트', '15,000'], ['펌', '50,000~'], ['염색', '45,000~']]], ['진료안내', [['평일', '09:00-19:00'], ['토요일', '09:00-14:00']]]],
+};
+
+function standDesign(req, r, d) {
+  const g = STAND_MENU[req.c] ? req.c : 'service';
+  d.cat = g;
+  d.style = 'stand';
+  const [title, items] = r.pick(STAND_MENU[g]);
+  const chalk = (g === 'cafe' || g === 'bar') && r.chance(0.6);
+  d.text = title;
+  d.chalk = chalk;
+  if (chalk) {
+    d.bg = { type: 'solid', c1: r.pick(['#1E2B24', '#1C1C1C', '#23302A']) };
+    d.main = { text: title, font: r.pick([...FONTS.hand, 'Pacifico', 'Permanent Marker']), color: r.pick(['#FFFFFF', '#FFE9A8', '#F8C8D8']) };
+    d.items = items.map(([n, p]) => ({ n, p, font: r.pick(FONTS.hand), color: r.pick(['#FFFFFF', '#FFFFFF', '#CFEFFF', '#FFE9A8']) }));
+    d.box = { color: r.pick(['#6B4426', '#3A2A1A', '#1A1A1A']), depth: 0.05 };
+    d.glow = 'none';
+  } else {
+    const pal = r.pick(g === 'service' ? PRO : FLEX);
+    d.bg = { type: 'vgrad', c1: pal[0], c2: shade(pal[0], 0.8) };
+    d.main = { text: title, font: r.pick(FONTS.headline), color: pal[1] };
+    d.items = items.map(([n, p]) => ({ n, p, font: '700 Noto Sans KR', color: pal[1] }));
+    const info = CAT[{ cafe: 'cafe', food: 'restaurant', bar: 'hof', retail: 'clothes', service: 'hair' }[g]];
+    d.mark = { type: 'badge', glyph: r.pick(info.i), bg: pal[2] && pal[2] !== pal[0] ? pal[2] : '#FFFFFF', fg: pal[0], ring: pal[1] };
+    d.acc = pal[2] && pal[2] !== pal[0] ? pal[2] : pal[1];
+    d.box = { color: r.pick(['#DADDE0', '#2B2E33', BOX_ALU]), depth: 0.22 };
+    d.glow = 'face';
+  }
+  return d;
+}
+
+// Fabric awning: one horizontal tile (repeated along the shop front) holding
+// the sloped stripes above and the valance with its scalloped edge below.
+const AWNING = {
+  cafe: [['#1F5E3B', '#F4F1E8'], ['#1F2A44', '#F4F1E8'], ['#6B4426', '#EFE3CF'], ['#2B2B2B', '#F4F1E8'], ['#9C2B23', '#F4F1E8'], ['#B5652A', '#F4EBDD'], ['#3D6B6B', '#F4F1E8']],
+  food: [['#B5121B', '#FFFFFF'], ['#C8102E', '#FFF6E0'], ['#1F5E3B', '#FFFFFF'], ['#E3A21A', '#FFFFFF'], ['#1F2A44', '#FFFFFF']],
+  retail: [['#111111', '#111111'], ['#1F2A44', '#1F2A44'], ['#D8CBB4', '#D8CBB4'], ['#3A3F44', '#F4F1E8']],
+};
+
+function awningDesign(req, r, d) {
+  const g = AWNING[req.c] ? req.c : 'cafe';
+  d.style = 'awning';
+  const [a, b] = r.pick(AWNING[g]);
+  d.text = 'awning';
+  d.stripes2 = a === b ? null : [a, b];
+  d.c1 = a;
+  d.edge = r.pick(['scallop', 'scallop', 'straight', 'zigzag']);
+  d.trim = a === b ? r.pick(['#F4F1E8', '#C9A46A', null]) : null;
+  d.box = { color: shade(a, 0.75), depth: 0.02, awning: true };
+  d.glow = 'none';
+  return d;
+}
+
+// ---------------------------------------------------------------- billboards
+// Products drawn on the ads (simple vector shapes, no real packshots).
+const AD_PRODUCT = {
+  기가커피: 'cup', 스타덕스: 'cup', 심송: 'phone', CUZ: 'bag', '농담식품 매운라면': 'bowl', 참아슬: 'bottle', 다음처럼: 'bottle',
+  올리브올드: 'tube', 꾸팡: 'box', 배달의겨레: 'scooter', 코코아T: 'car', 라떼: 'bag',
+};
+const AD_COPY = {
+  심송: ['새로운 폰, 새로운 일상', 'SIMSONG'], 기가커피: ['커피는 크게, 가격은 착하게', 'GIGA COFFEE'], 스타덕스: ['겨울 시즌 음료 출시', 'STARDUCKS'],
+  '농담식품 매운라면': ['맵다! 그런데 또 생각난다', '매운라면'], 참아슬: ['깨끗하게, 부드럽게', '참아슬'], 다음처럼: ['다음에도, 처음처럼', '다음처럼'],
+  올리브올드: ['오늘의 나를 위한 뷰티', 'OLIVE OLD'], 꾸팡: ['내일 아침 문 앞에', '꾸팡'], 배달의겨레: ['배달은 역시 겨레', '배달의겨레'], 코코아T: ['어디든 부르면 와요', '코코아T'],
+  CUZ: ['가까워서 좋은 편의점', 'CUZ'], 라떼: ['일상에 라떼를 더하다', '라떼'],
+};
+
 function boardDesign(req, r, d) {
   d.style = 'board';
   const lat = BRAND_LATIN[req.t];
-  const main = lat ? lat[0] : req.t;
-  d.text = lat ? `${main} ${req.t}` : req.t;
+  const copy = AD_COPY[req.t];
+  const main = copy ? copy[0] : lat ? lat[0] : req.t;
+  const brandName = copy ? copy[1] : lat ? lat[0] : req.t;
+  d.text = `${req.t} 광고`;
   d.bg = { type: 'vgrad', c1: req.bg, c2: shade(req.bg, 0.6) };
   d.main = { text: main, font: isLatin(main) ? r.pick(['Archivo Black', 'Anton', '900 Montserrat']) : r.pick(['Black Han Sans', '900 Noto Sans KR', 'Do Hyeon']), color: req.fg };
-  d.sub.push({ text: r.pick(['새로운 맛의 시작', '지금 만나보세요', '오늘도 함께', '더 가까이, 더 새롭게', 'NEW OPEN', '언제 어디서나']), color: req.fg, font: '700 Noto Sans KR' });
+  d.sub.push({ text: brandName, color: req.fg, font: isLatin(brandName) ? '800 Montserrat' : '900 Noto Sans KR' });
+  d.product = AD_PRODUCT[req.t] || 'bag';
   d.box = { color: '#2A2C30', depth: 0.5, legs: true };
   d.glow = 'face';
   return d;
@@ -717,4 +1011,4 @@ function bannerDesign(r, d) {
   return d;
 }
 
-export const DENSITY = { fascia: 56, vert: 56, stack: 46, upper: 44, banner: 40, board: 30, exit: 72 };
+export const DENSITY = { fascia: 56, vert: 56, stack: 46, upper: 44, banner: 40, board: 30, exit: 72, decal: 50, stand: 60, awning: 40, disc: 80, band: 56, cross: 24 };

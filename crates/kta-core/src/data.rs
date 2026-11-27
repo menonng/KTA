@@ -48,6 +48,11 @@ pub struct Sign {
     pub h: f32,
     pub label: u16,
     pub vertical: bool,
+    /// Mounting: 0 wall sign, 1 window decal, 2 awning, 3 standing sign
+    /// (light box on the pavement), 4 round projecting disc, 5 rooftop cross.
+    /// Stored in the
+    /// flags byte (bits 1-3) next to `vertical` (bit 0).
+    pub mount: u8,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -195,7 +200,7 @@ pub fn parse(bytes: &[u8]) -> Result<MapData, ParseError> {
         let label = r.u16()?;
         let flags = r.u8()?;
         let _pad = r.u8()?;
-        signs.push(Sign { x: p[0], y, z: p[1], yaw, w, h, label, vertical: flags & 1 != 0 });
+        signs.push(Sign { x: p[0], y, z: p[1], yaw, w, h, label, vertical: flags & 1 != 0, mount: (flags >> 1) & 7 });
     }
     Ok(MapData { origin_lat, origin_lon, buildings, roads, entrances, signs })
 }
@@ -256,7 +261,7 @@ pub fn write(m: &MapData) -> Vec<u8> {
         o.extend_from_slice(&((s.w * 100.0).round() as u16).to_le_bytes());
         o.extend_from_slice(&((s.h * 100.0).round() as u16).to_le_bytes());
         o.extend_from_slice(&s.label.to_le_bytes());
-        o.push(s.vertical as u8);
+        o.push(s.vertical as u8 | (s.mount & 7) << 1);
         o.push(0);
     }
     o
@@ -282,7 +287,7 @@ mod tests {
             }],
             roads: vec![Road { pts: vec![[0.0, 0.0], [5.0, 5.0]], kind: 1, width: 20.0 }],
             entrances: vec![Entrance { x: 1.0, z: 2.0, yaw: 1.0, exit_no: 9 }],
-            signs: vec![Sign { x: 1.0, y: 3.5, z: 2.0, yaw: 0.5, w: 3.0, h: 0.9, label: 3, vertical: true }],
+            signs: vec![Sign { x: 1.0, y: 3.5, z: 2.0, yaw: 0.5, w: 3.0, h: 0.9, label: 3, vertical: true, mount: 4 }],
         };
         let b = write(&m);
         let p = parse(&b).unwrap();
@@ -292,6 +297,7 @@ mod tests {
         assert_eq!(p.buildings[0].street, vec![true, false, true]);
         assert_eq!(p.entrances[0].exit_no, 9);
         assert!(p.signs[0].vertical);
+        assert_eq!(p.signs[0].mount, 4);
         assert!((p.roads[0].width - 20.0).abs() < 0.01);
     }
 }

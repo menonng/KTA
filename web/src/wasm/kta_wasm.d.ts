@@ -61,7 +61,7 @@ export class Game {
      */
     roads_desc(): Uint32Array;
     /**
-     * Flattened signs: x, y, z, yaw, w, h, label, vertical.
+     * Flattened signs: x, y, z, yaw, w, h, label, flags (bit 0 vertical, bits 1-3 mount).
      */
     signs(): Float32Array;
     /**

@@ -389,9 +389,6 @@ impl Props {
     fn bx(&mut self, pos: [f32; 3], yaw: f32, size: [f32; 3], color: [u8; 4]) {
         self.add(Prim { shape: SHAPE_BOX, segs: 0, color, pos, yaw, pitch: 0.0, size });
     }
-    fn bxp(&mut self, pos: [f32; 3], yaw: f32, pitch: f32, size: [f32; 3], color: [u8; 4]) {
-        self.add(Prim { shape: SHAPE_BOX, segs: 0, color, pos, yaw, pitch, size });
-    }
     fn cyl(&mut self, pos: [f32; 3], r: f32, h: f32, segs: u8, color: [u8; 4]) {
         self.add(Prim { shape: SHAPE_CYL, segs, color, pos, yaw: 0.0, pitch: 0.0, size: [r * 2.0, h, r * 2.0] });
     }
@@ -435,8 +432,10 @@ impl Props {
                 }
                 let at = |u: f32, out: f32| [a[0] + dir[0] * u + nrm[0] * out, a[1] + dir[1] * u + nrm[1] * out];
 
-                // Wall AC units (실외기) hanging under windows.
-                for f in 1..lv.min(9) {
+                // Wall AC units (실외기) hanging under windows (not across the
+                // ground-floor sign band of shop fronts).
+                let first_floor = if facing && shopish { 2 } else { 1 };
+                for f in first_floor..lv.min(9) {
                     if ac_left == 0 || len < 2.6 {
                         break;
                     }
@@ -454,13 +453,9 @@ impl Props {
                     let w = (len - 0.5).min(9.0);
                     let u = len * 0.5;
                     let p = at(u, 0.16);
-                    self.bx([p[0], 2.6, p[1]], yaw, [w, 0.3, 0.3], rgb(0x8c9095)); // shutter housing
-                    if rng.f() < 0.3 {
-                        let aw = (len - 0.8).min(5.0).max(1.5);
-                        let pa = at(rng.range(aw * 0.5 + 0.2, len - aw * 0.5 - 0.2), 0.62);
-                        let col = rng.pick(&[0xb8322f, 0x2f7d4b, 0x2f5d9e, 0xd9822b, 0x7a2e5c, 0x3a3a3a]);
-                        self.bxp([pa[0], 2.45, pa[1]], yaw, 0.32, [aw, 0.06, 1.3], rgb(col));
-                    }
+                    // Roller-shutter housing just under the sign band (awnings are
+                    // printed fabric, drawn with the signs).
+                    self.bx([p[0], 2.82, p[1]], yaw, [w, 0.24, 0.22], rgb(0x8c9095));
                     if rng.f() < 0.14 {
                         // Parked scooter along the wall.
                         let ps = at(rng.range(0.8, len - 0.8), 1.25);

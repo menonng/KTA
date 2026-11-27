@@ -13,6 +13,10 @@ export interface SignBox {
   color: string;
   depth: number;
   legs?: boolean;
+  /** Storefront cladding colour: pilasters and kick plate around the glass. */
+  frame?: string | null;
+  disc?: boolean;
+  awning?: boolean;
 }
 
 export interface SignMeta {
@@ -43,7 +47,11 @@ export interface SignInst {
   h: number;
   label: number;
   vertical: boolean;
+  /** 0 wall, 1 window decal, 2 awning, 3 standing light box, 4 round blade sign, 5 rooftop cross. */
+  mount: number;
 }
+
+export const MOUNT = { wall: 0, decal: 1, awning: 2, stand: 3, disc: 4, cross: 5 } as const;
 
 /** Load the per-page KTX2 files and merge them into one array texture. */
 function dropArray(this: THREE.BufferAttribute) {
@@ -114,12 +122,21 @@ function signMaterial(night: { value: number }, atlasSize: number) {
         float pxW = (vRect.z - vRect.x) * uSize;
         float e = 1.5 / pxW;
         // Wider sign: stretch the edge columns; narrower: condense the artwork.
-        float tx = clamp(xm / min(vInfo.w, vInfo.y) + 0.5, e, 1.0 - e);
+        // Negative artwork width = horizontal tile period (awning fabric).
+        float txr = vInfo.w < 0.0 ? xm / -vInfo.w + 0.5 : xm / min(vInfo.w, vInfo.y) + 0.5;
+        float tx = clamp(vInfo.w < 0.0 ? fract(txr) : txr, e, 1.0 - e);
         vec2 auv = vec2(mix(vRect.x, vRect.z, tx), mix(vRect.y, vRect.w, vSUv.y));
-        vec4 sc = texture(tSigns, vec3(auv, vInfo.x));
+        // Mip selection from the unwrapped coordinate: no seams where the tile wraps.
+        vec2 auvR = vec2(mix(vRect.x, vRect.z, txr), auv.y);
+        vec2 gdx = dFdx(auvR);
+        vec2 gdy = dFdy(auvR);
+        // Awning fabric is constant along v and seen at grazing angles: pick the
+        // mip from u alone so the stripes stay crisp without anisotropic filtering.
+        if (vInfo.w < 0.0) { gdx.y *= 0.1; gdy.y *= 0.1; }
+        vec4 sc = textureGrad(tSigns, vec3(auv, vInfo.x), gdx, gdy);
         float op = min(sc.a * 2.0, 1.0);
         float em = max(sc.a * 2.0 - 1.0, 0.0);
-        vec2 tp = auv * uSize;
+        vec2 tp = auvR * uSize;
         float lod = 0.5 * log2(max(max(dot(dFdx(tp), dFdx(tp)), dot(dFdy(tp), dFdy(tp))), 1e-6));
         if (op < mix(0.5, 0.28, clamp(lod / 3.0, 0.0, 1.0))) discard;
         // Weathering in sign space (consistent across the stretched edges).
@@ -132,19 +149,35 @@ function signMaterial(night: { value: number }, atlasSize: number) {
       )
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += sEm * mix(0.3, 1.3, uNight);');
   };
-  m.customProgramCacheKey = () => 'kta-signs-3';
+  m.customProgramCacheKey = () => 'kta-signs-5';
   return { m, tSigns };
 }
 
 export function buildSigns(atlas: SignAtlas, input: SignInst[], night: { value: number }) {
   // Vertical signs are boxes seen from both sides: a face on each side.
-  type Face = SignInst & { meta: SignMeta };
+  type Face = SignInst & { meta: SignMeta; pitch?: number; rect?: [number, number, number, number] };
   const faces: Face[] = [];
+  const AWN_TILT = 0.36; // awning slope below horizontal (rad)
+  const AWN_VAL = 0.26; // valance drop (m)
   for (const s of input) {
     const meta = atlas.signs[s.label];
     if (!meta) continue;
     const nx = Math.sin(s.yaw);
     const nz = Math.cos(s.yaw);
+    if (s.mount === MOUNT.awning) {
+      // Tile rows 0-70 % are the slope, the rest the valance (see signgen).
+      const [u0, vb, u1, vt] = meta.r;
+      const vs = vt + 0.7 * (vb - vt);
+      const L = s.h;
+      const out = Math.cos(AWN_TILT) * L;
+      const drop = Math.sin(AWN_TILT) * L;
+      faces.push({ ...s, x: s.x + nx * out * 0.5, z: s.z + nz * out * 0.5, y: s.y - drop * 0.5, h: L, meta, pitch: -(Math.PI / 2 - AWN_TILT), rect: [u0, vs, u1, vt] });
+      faces.push({ ...s, x: s.x + nx * (out + 0.004), z: s.z + nz * (out + 0.004), y: s.y - drop - AWN_VAL * 0.5, h: AWN_VAL, meta, rect: [u0, vb, u1, vs] });
+      // Underside: the same fabric seen from the pavement (stripes show through).
+      const lo = 0.026;
+      faces.push({ ...s, x: s.x + nx * (out * 0.5 - Math.sin(AWN_TILT) * lo), z: s.z + nz * (out * 0.5 - Math.sin(AWN_TILT) * lo), y: s.y - drop * 0.5 - Math.cos(AWN_TILT) * lo, h: L, meta, pitch: Math.PI / 2 + AWN_TILT, rect: [u0, vs, u1, vt] });
+      continue;
+    }
     if (s.vertical) {
       const half = (meta.box?.depth ?? 0.3) * 0.5 + 0.006;
       faces.push({ ...s, x: s.x + nx * half, z: s.z + nz * half, meta });
@@ -166,6 +199,8 @@ export function buildSigns(atlas: SignAtlas, input: SignInst[], night: { value: 
   const m4 = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const up = new THREE.Vector3(0, 1, 0);
+  const xAxis = new THREE.Vector3(1, 0, 0);
+  const qp = new THREE.Quaternion();
   const pos = new THREE.Vector3();
   const scl = new THREE.Vector3();
 
@@ -184,7 +219,7 @@ export function buildSigns(atlas: SignAtlas, input: SignInst[], night: { value: 
     const rect = new Float32Array(list.length * 4);
     const info = new Float32Array(list.length * 4);
     list.forEach((f, i) => {
-      rect.set(f.meta.r, i * 4);
+      rect.set(f.rect ?? f.meta.r, i * 4);
       info.set([f.meta.l, f.w, f.h, f.meta.iw], i * 4);
     });
     geo.setAttribute('aRect', new THREE.InstancedBufferAttribute(rect, 4).onUpload(dropArray));
@@ -192,6 +227,7 @@ export function buildSigns(atlas: SignAtlas, input: SignInst[], night: { value: 
     const mesh = new THREE.InstancedMesh(geo, mat, list.length);
     list.forEach((f, i) => {
       q.setFromAxisAngle(up, f.yaw);
+      if (f.pitch) q.multiply(qp.setFromAxisAngle(xAxis, f.pitch));
       mesh.setMatrixAt(i, m4.compose(pos.set(f.x, f.y, f.z), q, scl.set(f.w, f.h, 1)));
     });
     mesh.instanceMatrix.needsUpdate = true;
@@ -204,12 +240,13 @@ export function buildSigns(atlas: SignAtlas, input: SignInst[], night: { value: 
   }
 
   // Light boxes, panels, brackets and billboard legs.
-  type BoxI = { x: number; y: number; z: number; yaw: number; sx: number; sy: number; sz: number; col: THREE.Color };
+  type BoxI = { x: number; y: number; z: number; yaw: number; sx: number; sy: number; sz: number; col: THREE.Color; pitch?: number };
   const boxCells = new Map<string, BoxI[]>();
-  const add = (x: number, y: number, z: number, yaw: number, sx: number, sy: number, sz: number, col: THREE.Color) => {
+  const add = (x: number, y: number, z: number, yaw: number, sx: number, sy: number, sz: number, col: THREE.Color, pitch?: number) => {
     const k = keyOf(x, z);
-    (boxCells.get(k) ?? boxCells.set(k, []).get(k)!).push({ x, y, z, yaw, sx, sy, sz, col });
+    (boxCells.get(k) ?? boxCells.set(k, []).get(k)!).push({ x, y, z, yaw, sx, sy, sz, col, pitch });
   };
+  const discs: BoxI[] = [];
   const dark = new THREE.Color(0x2a2c30);
   const steel = new THREE.Color(0x4a4d52);
   for (const s of input) {
@@ -218,6 +255,46 @@ export function buildSigns(atlas: SignAtlas, input: SignInst[], night: { value: 
     const nx = Math.sin(s.yaw);
     const nz = Math.cos(s.yaw);
     const b = meta.box;
+    // Tangent along the wall for wall-mounted signs.
+    const tx = Math.cos(s.yaw);
+    const tz = -Math.sin(s.yaw);
+    if (s.mount === MOUNT.awning) {
+      // Fabric underside (casts the shadow) just below the printed slope.
+      const L = s.h;
+      const out = Math.cos(AWN_TILT) * L;
+      const drop = Math.sin(AWN_TILT) * L;
+      const lift = 0.013;
+      add(s.x + nx * (out * 0.5 - Math.sin(AWN_TILT) * lift), s.y - drop * 0.5 - Math.cos(AWN_TILT) * lift, s.z + nz * (out * 0.5 - Math.sin(AWN_TILT) * lift), s.yaw, s.w - 0.01, L - 0.01, 0.008, new THREE.Color(b?.color ?? '#555555'), -(Math.PI / 2 - AWN_TILT));
+      // Two thin arms from the wall to the front bar.
+      for (const side of [-0.5, 0.5]) {
+        const ax = s.x + tx * (s.w * side - Math.sign(side) * 0.05);
+        const az = s.z + tz * (s.w * side - Math.sign(side) * 0.05);
+        add(ax + nx * out * 0.5, s.y - drop - 0.03, az + nz * out * 0.5, s.yaw, 0.03, 0.03, out, steel);
+      }
+      continue;
+    }
+    if (s.mount === MOUNT.disc) {
+      discs.push({ x: s.x, y: s.y, z: s.z, yaw: s.yaw, sx: s.w + 0.05, sy: s.h + 0.05, sz: b?.depth ?? 0.1, col: new THREE.Color(b?.color ?? '#2a2f33') });
+      const gap = Math.max(0.06, 0.62 - s.w * 0.5);
+      const wx = Math.cos(s.yaw);
+      const wz = -Math.sin(s.yaw);
+      const bx = s.x - wx * (s.w * 0.5 + gap * 0.5);
+      const bz = s.z - wz * (s.w * 0.5 + gap * 0.5);
+      add(bx, s.y + s.h * 0.5 + 0.04, bz, s.yaw + Math.PI / 2, gap + s.w * 0.5, 0.05, 0.05, steel);
+      continue;
+    }
+    if (s.mount === MOUNT.cross) {
+      // Cut-out neon cross on a short mast standing on the roof.
+      add(s.x, s.y - s.h * 0.5 - 0.25, s.z, s.yaw, 0.1, 0.5, 0.1, dark);
+      continue;
+    }
+    if (s.mount === MOUNT.stand) {
+      const depth = b?.depth ?? 0.2;
+      add(s.x, s.y, s.z, s.yaw, s.w + 0.06, s.h + 0.06, depth, new THREE.Color(b?.color ?? '#a7abb0'));
+      // Weighted base.
+      add(s.x, s.y - s.h * 0.5 - 0.03, s.z, s.yaw, s.w + 0.14, 0.06, depth + 0.22, dark);
+      continue;
+    }
     if (s.vertical) {
       const depth = b?.depth ?? 0.3;
       add(s.x, s.y, s.z, s.yaw, s.w + 0.06, s.h + 0.06, depth, new THREE.Color(b?.color ?? '#a7abb0'));
@@ -233,6 +310,20 @@ export function buildSigns(atlas: SignAtlas, input: SignInst[], night: { value: 
     if (!b) continue;
     const off = meta.off + b.depth * 0.5 + 0.008;
     add(s.x - nx * off, s.y, s.z - nz * off, s.yaw, s.w + 0.07, s.h + 0.07, b.depth, new THREE.Color(b.color));
+    if (b.frame && s.mount === MOUNT.wall && s.y < 6) {
+      // Storefront cladding: pilasters from the pavement to the fascia and a
+      // kick plate under the glass (the face sits 0.25 m off the wall).
+      const fc = new THREE.Color(b.frame);
+      const pw = 0.3;
+      const ph = s.y - s.h * 0.5 - 0.035;
+      if (ph > 1.5) {
+        for (const side of [-1, 1]) {
+          const lat = side * (s.w * 0.5 + 0.035 - pw * 0.5);
+          add(s.x + tx * lat - nx * 0.125, ph * 0.5, s.z + tz * lat - nz * 0.125, s.yaw, pw, ph, 0.25, fc);
+        }
+        add(s.x - nx * 0.21, 0.15, s.z - nz * 0.21, s.yaw, Math.max(0.2, s.w - 2 * pw + 0.07), 0.3, 0.08, fc);
+      }
+    }
     if (b.legs) {
       const legH = 1.6;
       const base = s.y - s.h / 2 - legH;
@@ -248,6 +339,7 @@ export function buildSigns(atlas: SignAtlas, input: SignInst[], night: { value: 
     const boxes = new THREE.InstancedMesh(cube, boxMat, list.length);
     list.forEach((o, i) => {
       q.setFromAxisAngle(up, o.yaw);
+      if (o.pitch) q.multiply(qp.setFromAxisAngle(xAxis, o.pitch));
       boxes.setMatrixAt(i, m4.compose(pos.set(o.x, o.y, o.z), q, scl.set(o.sx, o.sy, o.sz)));
       boxes.setColorAt(i, o.col);
     });
@@ -260,6 +352,22 @@ export function buildSigns(atlas: SignAtlas, input: SignInst[], night: { value: 
     boxes.matrixAutoUpdate = false;
     group.add(boxes);
     boxCount += list.length;
+  }
+  if (discs.length) {
+    // Round blade signs: a short cylinder with its axis across the sign.
+    const cyl = new THREE.CylinderGeometry(0.5, 0.5, 1, 28).rotateX(Math.PI / 2);
+    const dm = new THREE.InstancedMesh(cyl, boxMat, discs.length);
+    discs.forEach((o, i) => {
+      q.setFromAxisAngle(up, o.yaw);
+      dm.setMatrixAt(i, m4.compose(pos.set(o.x, o.y, o.z), q, scl.set(o.sx, o.sy, o.sz)));
+      dm.setColorAt(i, o.col);
+    });
+    dm.castShadow = true;
+    dm.receiveShadow = true;
+    dm.computeBoundingSphere();
+    dm.matrixAutoUpdate = false;
+    group.add(dm);
+    boxCount += discs.length;
   }
   group.matrixAutoUpdate = false;
 

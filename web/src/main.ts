@@ -55,7 +55,8 @@ async function boot() {
   const s = game.signs();
   const signs: SignInst[] = [];
   for (let i = 0; i < s.length; i += 8) {
-    signs.push({ x: s[i], y: s[i + 1], z: s[i + 2], yaw: s[i + 3], w: s[i + 4], h: s[i + 5], label: s[i + 6], vertical: s[i + 7] > 0.5 });
+    const fl = Math.round(s[i + 7]);
+    signs.push({ x: s[i], y: s[i + 1], z: s[i + 2], yaw: s[i + 3], w: s[i + 4], h: s[i + 5], label: s[i + 6], vertical: (fl & 1) !== 0, mount: fl >> 1 });
   }
   const signLayer = buildSigns(atlas, signs, env.night);
   scene.add(signLayer.group);
@@ -179,7 +180,8 @@ async function boot() {
       return [...agg].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([k, v]) => `${(v / 1048576).toFixed(2)} ${k}`);
     },
     findSign: (text: string) => {
-      const sg = signs.find((g) => atlas.signs[g.label]?.t.includes(text));
+      const hit = (g: SignInst) => atlas.signs[g.label]?.t.includes(text);
+      const sg = signs.find((g) => hit(g) && !g.vertical) ?? signs.find(hit);
       return sg ? { x: sg.x, z: sg.z, yaw: sg.yaw, vertical: sg.vertical } : null;
     },
     bench: null as unknown,

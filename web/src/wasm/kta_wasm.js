@@ -195,7 +195,7 @@ export class Game {
         return v1;
     }
     /**
-     * Flattened signs: x, y, z, yaw, w, h, label, vertical.
+     * Flattened signs: x, y, z, yaw, w, h, label, flags (bit 0 vertical, bits 1-3 mount).
      * @returns {Float32Array}
      */
     signs() {

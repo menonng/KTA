@@ -61,13 +61,13 @@ impl Game {
         self.w.map.entrances.iter().flat_map(|e| [e.x, e.z, e.yaw, e.exit_no as f32]).collect()
     }
 
-    /// Flattened signs: x, y, z, yaw, w, h, label, vertical.
+    /// Flattened signs: x, y, z, yaw, w, h, label, flags (bit 0 vertical, bits 1-3 mount).
     pub fn signs(&self) -> Vec<f32> {
         self.w
             .map
             .signs
             .iter()
-            .flat_map(|s| [s.x, s.y, s.z, s.yaw, s.w, s.h, s.label as f32, s.vertical as u8 as f32])
+            .flat_map(|s| [s.x, s.y, s.z, s.yaw, s.w, s.h, s.label as f32, (s.vertical as u8 | s.mount << 1) as f32])
             .collect()
     }
 
