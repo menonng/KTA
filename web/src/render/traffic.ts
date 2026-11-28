@@ -474,9 +474,11 @@ function beamTexture(): THREE.Texture {
     for (let x = 0; x < 64; x++) {
       const v = (y + 0.5) / 128; // 0 at the car, 1 far
       const u = ((x + 0.5) / 64 - 0.5) * 2;
-      const spread = 0.35 + v * 0.65;
-      const lat = Math.max(0, 1 - Math.pow(Math.abs(u) / spread, 2));
-      const a = lat * Math.pow(1 - v, 1.6) * Math.min(1, v * 8);
+      // Two soft lamp pools merging into one cone; gaussian edges, no hard outline.
+      const spread = 0.28 + v * 0.7;
+      const lat = Math.exp(-Math.pow(u / spread, 2) * 2.2);
+      const pools = 0.55 + 0.45 * Math.exp(-Math.pow((Math.abs(u) - 0.35 * (1 - v)) / 0.18, 2));
+      const a = lat * pools * Math.pow(1 - v, 2.2) * Math.min(1, v * 5);
       const o = (y * 64 + x) * 4;
       img.data[o] = 255;
       img.data[o + 1] = 236;
@@ -589,7 +591,7 @@ export class CarLayer {
     let blobs = 0;
     let beams = 0;
     this.visible = 0;
-    this.beamMat.opacity = Math.min(1, night * 1.2) * 0.55;
+    this.beamMat.opacity = Math.min(1, night * 1.2) * 0.3;
     this.beam.visible = night > 0.05;
     const fill = new Array(this.types.length).fill(0);
     const put = (c: CarInst, isMoving: boolean) => {

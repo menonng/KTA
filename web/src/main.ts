@@ -346,6 +346,8 @@ async function boot() {
     post.atmo.density = env.fog.density;
     post.atmo.falloff = env.fog.falloff;
     post.atmo.wet = env.surface.uWet.value;
+    // At night the haze is lit only by the street, far dimmer than the glowing horizon in the sky LUT.
+    post.atmo.fogScale = 1 - 0.7 * env.night.value;
     precip.update(dt, camera.position, env.night.value);
     post.render(scene, camera, env.grade);
 

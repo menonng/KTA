@@ -135,8 +135,15 @@ if (fRoof > 0.5) {
   fNt = texture(tWallN, vec3(wuv, layer)).xyz * 2.0 - 1.0;
   float streak = kN(vec2(fU * 1.4, fV * 0.05) + fSeed * 2.0);
   wcol *= 1.0 - 0.14 * smoothstep(0.62, 0.95, streak) * smoothstep(fH, fH - 6.0, fV);
+  // Weathering: blotchy discolouration, grime rising from the pavement, darker under the roof edge.
+  wcol *= 0.9 + 0.2 * kN(vec2(fU, fV) * 0.18 + fSeed * 3.7);
+  wcol *= mix(0.74, 1.0, smoothstep(0.0, 1.4, fV + 0.4 * kN(vec2(fU * 2.0, 1.3))));
+  wcol *= 1.0 - 0.12 * smoothstep(fH - 1.6, fH - 0.3, fV) * (0.6 + 0.4 * kN(vec2(fU * 3.0, fSeed)));
+  // Floor slab ledge: a lit top edge and a shadow line under it (reads as relief at a glance).
   float band = kPulse(gp.y, 0.0, 0.03, gw.y);
-  fCol = wcol * (1.0 - 0.14 * band);
+  float under = kPulse(gp.y, -0.025, 0.0, gw.y) * (1.0 - farF);
+  fCol = wcol * (1.0 - 0.14 * band) * (1.0 - 0.35 * under);
+  fNt = normalize(mix(fNt, vec3(0.0, 0.85, 0.53), band * (1.0 - farF) * step(1.0, gp.y)));
   bool shop = fShopE > 0.5;
   if (fV < floorH && shop) {
     // Ground floor: granite cladding, aluminum frames, deep shop interiors.
@@ -162,11 +169,11 @@ if (fRoof > 0.5) {
       vec3 lightC = bs < 0.35 ? vec3(1.0, 1.0, 1.02) : bs < 0.7 ? vec3(1.0, 0.86, 0.66) : vec3(1.0, 0.74, 0.55);
       float on = mix(step(0.15, kH1(bay + fSeed * 0.3)), 0.85, farF);
       vec3 inside = mix(room * lightC, vec3(0.75, 0.7, 0.62), farF);
-      float level = mix(0.075, 0.62, uNight) * on;
+      float level = mix(0.2, 0.62, uNight) * on;
       fCol = mix(fCol, vec3(0.02), glass);
       fNt = mix(fNt, vec3(0.0, 0.0, 1.0), glass);
       fRough = mix(fRough, 0.06, glass);
-      fres = max(fres, 0.12);
+      fres = max(fres, 0.06);
       fEmis = (inside * level * vec3(0.86, 0.92, 0.9) * (1.0 - fres) + skyRefl * fres) * glass;
     }
     if (fV > 2.76) fCol = gcol * 0.85;
@@ -203,6 +210,14 @@ if (fRoof > 0.5) {
     float frameW = (1.0 - farF) * (1.0 - kPulse(gp.x, 0.5 - winW * 0.44, 0.5 + winW * 0.44, gw.x)
               * kPulse(gp.y, 0.3 + winH * 0.04, 0.3 + winH * 0.96, gw.y)) * cov;
     float glassA = cov - frameW;
+    // Rain streaks washing down from the window sills.
+    {
+      float fy = fract(gp.y);
+      float sx = kPulse(gp.x, 0.5 - winW * 0.5, 0.5 + winW * 0.5, gw.x);
+      float st = kN(vec2(fU * 9.0, floor(gp.y) * 3.1 + fSeed));
+      float wash = sx * smoothstep(0.3, 0.02, fy) * step(fy, 0.3) * smoothstep(0.35, 0.8, st) * (1.0 - cov) * (1.0 - farF);
+      fCol *= 1.0 - 0.22 * wash;
+    }
     // Recess shadow just inside the frame (top/left) for depth.
     if (glassA > 0.001) {
       vec2 cell = vec2(fract(gp.x), fract(gp.y));
@@ -221,7 +236,7 @@ if (fRoof > 0.5) {
       }
       float lit = step(0.5, ws);
       vec3 lightC = mix(vec3(1.0, 0.78, 0.5), vec3(0.75, 0.86, 1.0), step(0.85, ws));
-      float level = mix(0.05, 0.85 * lit + 0.025, uNight);
+      float level = mix(0.09, 0.85 * lit + 0.025, uNight);
       vec3 inside = mix(room * mix(vec3(1.0), lightC, uNight), vec3(0.55, 0.5, 0.45) * mix(0.5, 0.48 + 0.0 * lit, uNight), farF);
       fCol = mix(fCol, vec3(0.02), glassA);
       fRough = mix(fRough, 0.05, glassA);
@@ -363,7 +378,7 @@ export function createBuildingMaterial(night: { value: number }, tex: TextureSet
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FACADE_NORMAL}`)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += fEmis;');
   };
-  m.customProgramCacheKey = () => 'kta-facade-tex-6';
+  m.customProgramCacheKey = () => 'kta-facade-tex-7';
   return m;
 }
 
@@ -578,12 +593,34 @@ function buildSkylineFiller(night: { value: number }): THREE.InstancedMesh {
   const count = 900;
   const geo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
   const mat = new THREE.MeshStandardMaterial({ color: 0x8a8d92, roughness: 0.9 });
+  // Window grid on the walls (world-space), dark by day, some lit at night; the body darkens at night.
   mat.onBeforeCompile = (s) => {
     s.uniforms.uNight = night;
+    s.vertexShader = s.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFW;\nvarying vec3 vFN;\nvarying float vFS;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFW = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;\nvFN = normalize(mat3(modelMatrix * instanceMatrix) * normal);\nvFS = fract(sin(dot(instanceMatrix[3].xz, vec2(12.9898, 78.233))) * 43758.5453);');
     s.fragmentShader = s.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float uNight;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += vec3(0.9, 0.75, 0.5) * 0.12 * uNight;');
+      .replace('#include <common>', '#include <common>\nuniform float uNight;\nvarying vec3 vFW;\nvarying vec3 vFN;\nvarying float vFS;\nfloat fWin = 0.0;\nfloat fLit = 0.0;')
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        {
+          float wall = step(abs(vFN.y), 0.5);
+          float along = abs(vFN.x) > abs(vFN.z) ? vFW.z : vFW.x;
+          vec2 g = vec2(along / 3.2, vFW.y / 3.3);
+          vec2 f = fract(g);
+          vec2 w = fwidth(g);
+          float wx = smoothstep(0.22 - w.x, 0.22 + w.x, f.x) * (1.0 - smoothstep(0.78 - w.x, 0.78 + w.x, f.x));
+          float wy = smoothstep(0.3 - w.y, 0.3 + w.y, f.y) * (1.0 - smoothstep(0.76 - w.y, 0.76 + w.y, f.y));
+          fWin = wall * wx * wy * step(1.0, vFW.y);
+          fLit = step(0.55, fract(sin(dot(floor(g), vec2(41.3, 289.1)) + vFS * 17.0) * 43758.5453));
+          diffuseColor.rgb *= (0.75 + 0.5 * vFS) * mix(1.0, 0.45, fWin);
+          diffuseColor.rgb *= 1.0 - 0.75 * uNight;
+        }`,
+      )
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += fWin * fLit * vec3(1.0, 0.8, 0.55) * 0.75 * uNight;');
   };
+  mat.customProgramCacheKey = () => 'kta-skyline-2';
   const inst = new THREE.InstancedMesh(geo, mat, count);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();

@@ -117,6 +117,7 @@ const compFs = /* glsl */ `
 uniform sampler2D tScene;
 uniform sampler2D tBloom;
 uniform sampler2D tAdapt;
+uniform float uFogScale;
 uniform float uKey;
 uniform sampler2D tAO;
 uniform float uAO;
@@ -198,7 +199,7 @@ void main() {
       vec3 R = reflect(dir, vec3(0.0, 1.0, 0.0));
       float pud = smoothstep(0.5, 0.72, nV(wp.xz * 0.11) * 0.7 + nV(wp.xz * 0.6) * 0.3);
       float fres = 0.08 + 0.92 * pow(1.0 - max(-dir.y, 0.0), 5.0);
-      float strength = uWet * mix(0.35, 0.95, pud) * fres;
+      float strength = uWet * mix(0.2, 0.8, pud) * fres;
       vec3 refl = skyAt(R, 3.0);
       float t = 0.6;
       for (int i = 0; i < 18; i++) {
@@ -210,7 +211,10 @@ void main() {
         float sceneDist = length(sp - uCamPos);
         float rayDist = length(p - uCamPos);
         if (sceneDist < rayDist - 0.05 && rayDist - sceneDist < t * 0.35 + 0.6) {
-          refl = texture2D(tScene, suv).rgb;
+          // Rough wet asphalt: blur the hit and fade it with distance travelled.
+          vec2 bl = vec2(0.004, 0.012) * (0.5 + t * 0.06);
+          refl = (texture2D(tScene, suv).rgb * 2.0 + texture2D(tScene, suv + bl).rgb + texture2D(tScene, suv - bl).rgb + texture2D(tScene, suv + vec2(-bl.x, bl.y)).rgb) / 5.0;
+          refl = mix(refl, skyAt(R, 3.0), smoothstep(8.0, 40.0, t) * 0.5);
           break;
         }
         t *= 1.28;
@@ -222,8 +226,9 @@ void main() {
     float h0 = max(uCamPos.y, 0.0);
     float ky = k * rd.y;
     float integ = abs(ky) > 1e-4 ? (1.0 - exp(-ky)) / ky : 1.0;
-    float fogA = 1.0 - exp(-uFogDensity * exp(-k * h0) * dist * integ);
-    c = mix(c, skyAt(dir, 3.5) * 0.9, clamp(fogA, 0.0, 0.92));
+    // Clear air close to the camera: the haze builds up beyond ~25 m.
+    float fogA = 1.0 - exp(-uFogDensity * exp(-k * h0) * max(dist - 25.0, 0.0) * integ);
+    c = mix(c, skyAt(dir, 4.5) * 0.85 * uFogScale, clamp(fogA, 0.0, 0.82));
   }
   c += texture2D(tBloom, vUv).rgb * uBloom;
   // Eye adaptation: partial correction towards a mid-grey key from the adapted average luminance.
@@ -300,7 +305,7 @@ export class Post {
   private adaptIdx = 0;
   private lastT = 0;
   /** Atmosphere inputs (set by main from the Environment). */
-  atmo: { lut: THREE.Texture | null; density: number; falloff: number; wet: number } = { lut: null, density: 0.002, falloff: 0.01, wet: 0 };
+  atmo: { lut: THREE.Texture | null; density: number; falloff: number; wet: number; fogScale: number } = { lut: null, density: 0.002, falloff: 0.01, wet: 0, fogScale: 1 };
   bytes = 0;
 
   constructor(private renderer: THREE.WebGLRenderer) {
@@ -333,6 +338,7 @@ export class Post {
         uVignette: { value: 0.3 },
         uBloom: { value: 0.3 },
         tAdapt: { value: null },
+        uFogScale: { value: 1 },
         uKey: { value: 0.14 },
         uTexel: { value: new THREE.Vector2() },
       },
@@ -498,6 +504,7 @@ export class Post {
     u.uFogDensity.value = this.atmo.lut ? this.atmo.density : 0;
     u.uFogFalloff.value = this.atmo.falloff;
     u.uWet.value = this.atmo.wet;
+    u.uFogScale.value = this.atmo.fogScale;
     u.uExposure.value = g.exposure;
     u.uTint.value.copy(g.tint);
     u.uShadow.value.copy(g.shadow);

@@ -264,7 +264,7 @@ export class Environment {
     this.scene.environmentIntensity = THREE.MathUtils.lerp(0.62, 1.5, night) * (1 + overcast * 0.25);
 
     const fogScale = look.fog * THREE.MathUtils.lerp(1, 1.4, night);
-    this.fog.density = 0.00085 * fogScale;
+    this.fog.density = 0.0006 * fogScale;
     this.fog.falloff = this.weather === 'rain' || this.weather === 'snow' ? 0.006 : 0.011;
     this.fog.sunGlow = look.sun;
 
