@@ -70,6 +70,6 @@ impl World {
             self.player.step(&self.grid, h, bits, fwd);
             left -= h;
         }
-        self.crowd.step(dt.min(0.25));
+        self.crowd.step(dt.min(0.25), Some([self.player.state[0], self.player.state[2]]));
     }
 }

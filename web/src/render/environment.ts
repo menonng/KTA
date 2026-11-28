@@ -183,7 +183,8 @@ export class Environment {
 
     this.sun = new THREE.DirectionalLight(0xffffff, 2.5);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(1024, 1024);
+    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.radius = 2.5;
     const sc = this.sun.shadow.camera;
     sc.left = -38;
     sc.right = 38;
@@ -278,9 +279,9 @@ export class Environment {
     if (overcast > 0.3) g.tint.lerp(new THREE.Color(0.97, 1.0, 1.05), overcast * 0.6);
     g.shadow.setRGB(L(0.97, 0.88, night), L(0.99, 0.96, night), L(1.03, 1.12, night));
     g.high.setRGB(L(L(1.06, 1.14, gold), 1.12, night), L(L(1.0, 0.98, gold), 1.0, night), L(L(0.9, 0.8, gold), 0.86, night));
-    g.contrast = L(1.08, 1.12, night) * (1 - overcast * 0.06);
-    g.saturation = L(L(1.05, 1.13, gold), 1.16, night) * look.sat;
-    g.vignette = L(0.32, 0.45, night);
+    g.contrast = L(1.06, 1.06, night) * (1 - overcast * 0.04);
+    g.saturation = L(L(0.95, 1.02, gold), 1.04, night) * look.sat;
+    g.vignette = L(0.26, 0.4, night);
     g.bloom = L(L(0.18, 0.3, gold), 0.72, night) * (this.weather === 'rain' ? 1.25 : 1);
 
     // Rebuild the LUT + IBL when the light has changed noticeably.

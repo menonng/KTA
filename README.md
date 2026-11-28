@@ -9,7 +9,7 @@ SNS에서 유행한 "Life in Korea" GTA풍 이미지(한국 일상을 보내는 
 
 ## 현재 상태 (Phase 0 일부)
 
-홍대입구역 주변 약 1km × 1km를 OpenStreetMap 데이터로 만들었습니다. 건물 2,225동, 도로, 지하철 출입구 9곳, 보행자 90명이 있습니다. 간판은 약 15,500개(유리창 시트·어닝·입간판·옥상 십자가 포함)입니다. 한국식 작명의 가상 상호와 로고 마크, 폰트 62종(한글·영문·일본어·중국어·태국어)으로 미리 그린 그림 3,280종을 씁니다. 프랜차이즈는 실제 매장 사진에 맞춘 외관을 따릅니다. 거리 소품(실외기, 전기함, 의자·상자, 맨홀, 셔터, 덮개 씌운 차)은 Poly Haven CC0 3D 모델, 가로수는 은행잎 카드형 나무입니다. 차량은 코드로 만든 6종(세단·경차·SUV·택시·1톤 트럭·시내버스)이 골목과 갓길에 주차되어 있고, 큰길에서는 72대가 차선을 따라 달립니다. 하늘·안개·날씨(맑음·흐림·비·눈)는 시각에 따라 바뀝니다. 실사 질감은 Poly Haven CC0 텍스처입니다.
+홍대입구역 주변 약 1km × 1km를 OpenStreetMap 데이터로 만들었습니다. 건물 2,225동, 도로, 지하철 출입구 9곳, 보행자 160명(MakeHuman CC0 몸 + CMU 모션 캡처, 플레이어 주변에서 계속 등장)이 있습니다. 간판은 약 15,500개(유리창 시트·어닝·입간판·옥상 십자가 포함)입니다. 한국식 작명의 가상 상호와 로고 마크, 폰트 62종(한글·영문·일본어·중국어·태국어)으로 미리 그린 그림 3,280종을 씁니다. 프랜차이즈는 실제 매장 사진에 맞춘 외관을 따릅니다. 거리 소품(실외기, 전기함, 의자·상자, 맨홀, 셔터, 덮개 씌운 차)은 Poly Haven CC0 3D 모델, 가로수는 은행잎 카드형 나무입니다. 차량은 코드로 만든 6종(세단·경차·SUV·택시·1톤 트럭·시내버스)이 골목과 갓길에 주차되어 있고, 큰길에서는 72대가 차선을 따라 달립니다. 하늘·안개·날씨(맑음·흐림·비·눈)는 시각에 따라 바뀝니다. 실사 질감은 Poly Haven CC0 텍스처입니다.
 
 ## 구조
 
@@ -18,7 +18,7 @@ crates/kta-core      게임 코어(Rust): 데이터 형식, 절차적 메시 생
 crates/kta-wasm      wasm-bindgen 바인딩
 crates/kta-datatool  OSM → 압축 타일 + 간판 요청 목록 변환 도구
 tools/signgen        간판 그림 생성기(빌드 때만 실행, 폰트는 배포하지 않음)
-tools/asset-pipeline 사진 텍스처·3D 모델(CC0) 내려받기, 폴리곤 감소, KTX2 압축, 가로수 텍스처
+tools/asset-pipeline 사진 텍스처·3D 모델(CC0) 내려받기, 폴리곤 감소, KTX2 압축, 가로수 텍스처, 사람(build_humans.mjs)
 web/                 Three.js 렌더러, HUD, 입력 (Vite)
 data-src/osm         원본 지도 데이터
 ```
@@ -33,6 +33,8 @@ cd web && npm ci && cd ..
 ./scripts/build.sh          # 데이터 변환 → 간판 그림 → WASM 빌드 → 웹 번들(web/dist)
 # 3D 모델·가로수 텍스처를 다시 만들 때만:
 # (cd tools/asset-pipeline && npm ci && python3 fetch_models.py work && node build_models.mjs work ../../web/public/models && node build_trees.mjs work ../../web/public/textures)
+# 사람 모델을 다시 만들 때만:
+# (cd tools/asset-pipeline && ./fetch_humans.sh work && node build_humans.mjs work/makehuman/makehuman/data work/cmu-mocap/data ../../web/public/models ../../web/public/textures)
 cd web && npm run preview   # http://localhost:4173
 ```
 

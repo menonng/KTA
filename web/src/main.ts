@@ -7,7 +7,7 @@ import { Input } from './platform/input';
 import { Environment } from './render/environment';
 import { buildEntrances, buildWorld } from './render/world';
 import { buildSigns, loadSignTexture, type SignAtlas, type SignInst } from './render/signs';
-import { Crowd, Protagonist } from './render/characters';
+import { loadHumans, People } from './render/humans';
 import { Hud } from './hud/hud';
 import { Post } from './render/post';
 import { loadTextures } from './render/textures';
@@ -21,7 +21,7 @@ const params = new URLSearchParams(location.search);
 const BENCH = params.has('bench');
 const FPS_CAP = Number(params.get('fps') ?? 60);
 const SCALE = Number(params.get('scale') ?? 1);
-const CROWD = Number(params.get('crowd') ?? 90);
+const CROWD = Number(params.get('crowd') ?? 160);
 
 async function boot() {
   const t0 = performance.now();
@@ -105,13 +105,12 @@ async function boot() {
   };
   setWeather((params.get('weather') as Weather) || 'clear');
 
-  const player = new Protagonist();
-  scene.add(player.root);
   // Cinematic fill light around the player at night (one dynamic light, plan 4.8).
   const fill = new THREE.PointLight(0xffd9a8, 0, 14, 1.6);
   scene.add(fill);
-  const crowd = new Crowd(game.crowd_count());
-  scene.add(crowd.group);
+  // People: the protagonist and the crowd (MakeHuman bodies + CMU motion capture).
+  const people = new People(await loadHumans(renderer), game.crowd_count());
+  scene.add(people.group);
 
   const spawnAt = entrances.find((e) => e.no === 9) ?? entrances[0] ?? { x: 0, z: 0, yaw: 0 };
   game.spawn(spawnAt.x + Math.cos(spawnAt.yaw) * 4, spawnAt.z - Math.sin(spawnAt.yaw) * 4);
@@ -234,6 +233,11 @@ async function boot() {
         showCars.push({ t, x: x + Math.sin(yaw) * off, z: z + Math.cos(yaw) * off, yaw, color: colors[t] });
       }
     },
+    nearestPeds: (n = 5) => {
+      const out: { x: number; z: number; yaw: number; d: number }[] = [];
+      for (let i = 0; i < cv.length; i += 4) out.push({ x: cv[i], z: cv[i + 1], yaw: cv[i + 2], d: Math.hypot(cv[i] - pv[0], cv[i + 1] - pv[2]) });
+      return out.sort((a, b) => a.d - b.d).slice(0, n);
+    },
     freezeTraffic: (on: boolean) => (trafficFrozen = on),
     laneSpot: () => {
       const L = traffic.lanes.reduce((a, b) => (b.len > a.len ? b : a));
@@ -274,7 +278,8 @@ async function boot() {
       lamps: street.lamps,
       postMB: +(post.bytes / 1048576).toFixed(1),
       texMB: +(tex.bytes / 1048576).toFixed(1),
-      crowd: crowd.count,
+      crowd: people.count,
+      people: people.visible,
       pixelRatio: renderer.getPixelRatio(),
     };
   }
@@ -308,10 +313,7 @@ async function boot() {
     }
     const px = pv[0];
     const pz = pv[2];
-    player.root.position.set(px, 0, pz);
-    player.root.rotation.y = pv[3];
-    player.animate(pv[5], pv[4], now / 1000);
-    crowd.update(cv);
+    people.update(dt, px, pz, pv[3], pv[4], cv, camera);
 
     hours = (hours + dt / 60) % 24; // 1 real second = 1 game minute
     env.setTime(hours);

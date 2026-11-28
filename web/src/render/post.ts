@@ -116,6 +116,8 @@ void main() {
 const compFs = /* glsl */ `
 uniform sampler2D tScene;
 uniform sampler2D tBloom;
+uniform sampler2D tAdapt;
+uniform float uKey;
 uniform sampler2D tAO;
 uniform float uAO;
 uniform sampler2D tDepth;
@@ -174,7 +176,13 @@ vec3 skyAt(vec3 dir, float lod) {
   vec2 luv = vec2(atan(d.z, d.x) * 0.15915494 + 0.5, asin(clamp(d.y, -1.0, 1.0)) * 0.31830989 + 0.5);
   return textureLod(tSkyLUT, luv, lod).rgb;
 }
-vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+// Filmic curve (Hable / Uncharted 2, as GTA V uses): keeps shadow detail, rolls highlights off softly.
+vec3 hableC(vec3 x) { return ((x * (0.15 * x + 0.05) + 0.004) / (x * (0.15 * x + 0.5) + 0.06)) - 0.0666667; }
+vec3 filmic(vec3 x) {
+  vec3 c = clamp(hableC(x * 6.27) * 1.163, 0.0, 1.0);
+  // Small black level so shadows keep depth (the curve's toe is lifted).
+  return max(c - 0.018, 0.0) / 0.982;
+}
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 void main() {
   float ao = mix(1.0, texture2D(tAO, vUv).r, uAO);
@@ -218,10 +226,13 @@ void main() {
     c = mix(c, skyAt(dir, 3.5) * 0.9, clamp(fogA, 0.0, 0.92));
   }
   c += texture2D(tBloom, vUv).rgb * uBloom;
-  c *= uExposure * uTint / 0.6; // same pre-scale as three.js ACESFilmic
+  // Eye adaptation: partial correction towards a mid-grey key from the adapted average luminance.
+  float adapted = max(texture2D(tAdapt, vec2(0.5)).r, 1e-4);
+  float autoExp = clamp(pow(uKey / adapted, 0.5), 0.7, 1.35);
+  c *= uExposure * autoExp * uTint / 0.6;
   float L = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c *= mix(uShadow, uHigh, smoothstep(0.02, 0.8, L));
-  c = aces(c);
+  c = filmic(c);
   c = clamp((c - 0.5) * uContrast + 0.5, 0.0, 1.0);
   float g = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = clamp(mix(vec3(g), c, uSat), 0.0, 1.0);
@@ -231,6 +242,40 @@ void main() {
   // Tiny dither against banding in the night sky.
   c += (fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
   gl_FragColor = vec4(c, 1.0);
+}`;
+
+// Average log luminance of the HDR scene, 4x4 taps per texel of a small target.
+const lumFs = /* glsl */ `
+varying vec2 vUv;
+uniform sampler2D tSrc;
+uniform vec2 uTexel;
+void main() {
+  float s = 0.0;
+  for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
+    vec2 o = (vec2(float(x), float(y)) - 1.5) * 0.25 * uTexel;
+    vec3 c = texture2D(tSrc, vUv + o).rgb;
+    s += log(dot(c, vec3(0.2126, 0.7152, 0.0722)) + 1e-4);
+  }
+  gl_FragColor = vec4(s / 16.0, 0.0, 0.0, 1.0);
+}`;
+
+// Adapted luminance: average of the small target, eased over time (faster towards bright, like an eye).
+const adaptFs = /* glsl */ `
+varying vec2 vUv;
+uniform sampler2D tLum;
+uniform sampler2D tPrev;
+uniform vec2 uSize;
+uniform float uDt;
+void main() {
+  float s = 0.0;
+  for (int y = 0; y < 18; y++) for (int x = 0; x < 32; x++) {
+    s += texture2D(tLum, (vec2(float(x), float(y)) + 0.5) / uSize).r;
+  }
+  float target = exp(s / 576.0);
+  float prev = texture2D(tPrev, vec2(0.5)).r;
+  if (prev <= 0.0 || prev > 1e4) prev = target;
+  float rate = target > prev ? 1.6 : 0.8;
+  gl_FragColor = vec4(prev + (target - prev) * (1.0 - exp(-uDt * rate)), 0.0, 0.0, 1.0);
 }`;
 
 export class Post {
@@ -247,7 +292,13 @@ export class Post {
   private aoBlurMat: THREE.ShaderMaterial;
   private ao!: THREE.WebGLRenderTarget;
   private aoBlur!: THREE.WebGLRenderTarget;
-  aoStrength = 0.75;
+  aoStrength = 0.9;
+  private lumMat!: THREE.ShaderMaterial;
+  private adaptMat!: THREE.ShaderMaterial;
+  private lum!: THREE.WebGLRenderTarget;
+  private adapt: THREE.WebGLRenderTarget[] = [];
+  private adaptIdx = 0;
+  private lastT = 0;
   /** Atmosphere inputs (set by main from the Environment). */
   atmo: { lut: THREE.Texture | null; density: number; falloff: number; wet: number } = { lut: null, density: 0.002, falloff: 0.01, wet: 0 };
   bytes = 0;
@@ -281,6 +332,8 @@ export class Post {
         uSat: { value: 1 },
         uVignette: { value: 0.3 },
         uBloom: { value: 0.3 },
+        tAdapt: { value: null },
+        uKey: { value: 0.14 },
         uTexel: { value: new THREE.Vector2() },
       },
       depthTest: false,
@@ -327,6 +380,11 @@ export class Post {
     this.quad.frustumCulled = false;
     this.qscene.add(this.quad);
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    this.lumMat = new THREE.ShaderMaterial({ vertexShader: vs, fragmentShader: lumFs, uniforms: { tSrc: { value: null }, uTexel: { value: new THREE.Vector2() } }, depthTest: false, depthWrite: false });
+    this.adaptMat = new THREE.ShaderMaterial({ vertexShader: vs, fragmentShader: adaptFs, uniforms: { tLum: { value: null }, tPrev: { value: null }, uSize: { value: new THREE.Vector2(32, 18) }, uDt: { value: 0.016 } }, depthTest: false, depthWrite: false });
+    const small = (w: number, h: number) => new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    this.lum = small(32, 18);
+    this.adapt = [small(1, 1), small(1, 1)];
     this.setSize(size.x, size.y);
   }
 
@@ -409,8 +467,23 @@ export class Post {
     this.upMat.uniforms.tLow.value = this.up[1].texture;
     this.upMat.uniforms.uTexel.value.set(1 / this.up[1].width, 1 / this.up[1].height);
     this.pass(this.upMat, this.up[0]);
+    // Eye adaptation.
+    const now = performance.now();
+    const dt = this.lastT ? Math.min(0.25, (now - this.lastT) / 1000) : 10;
+    this.lastT = now;
+    this.lumMat.uniforms.tSrc.value = this.scene.texture;
+    this.lumMat.uniforms.uTexel.value.set(1 / 32, 1 / 18);
+    this.pass(this.lumMat, this.lum);
+    const prev = this.adapt[this.adaptIdx];
+    const next = this.adapt[1 - this.adaptIdx];
+    this.adaptMat.uniforms.tLum.value = this.lum.texture;
+    this.adaptMat.uniforms.tPrev.value = prev.texture;
+    this.adaptMat.uniforms.uDt.value = dt;
+    this.pass(this.adaptMat, next);
+    this.adaptIdx = 1 - this.adaptIdx;
     // Composite to screen.
     const u = this.compMat.uniforms;
+    u.tAdapt.value = next.texture;
     u.tScene.value = this.scene.texture;
     u.tBloom.value = this.up[0].texture;
     u.tAO.value = this.aoBlur.texture;

@@ -197,7 +197,7 @@ impl Player {
             mv[1] -= right[1];
         }
         let l = (mv[0] * mv[0] + mv[1] * mv[1]).sqrt();
-        let speed = if bits & input::RUN != 0 { 6.0 } else { 2.3 };
+        let speed = if bits & input::RUN != 0 { 5.2 } else { 1.8 };
         let target = if l > 1e-4 { [mv[0] / l * speed, mv[1] / l * speed] } else { [0.0, 0.0] };
         let k = (dt * 10.0).min(1.0);
         self.vel[0] += (target[0] - self.vel[0]) * k;
@@ -230,7 +230,14 @@ pub struct Crowd {
     pub out: Vec<f32>,
     agents: Vec<Agent>,
     paths: Vec<Vec<P2>>,
+    widths: Vec<f32>,
+    /// Path index weighted by length, for respawning near the player.
+    cum: Vec<f32>,
+    seed: u32,
 }
+
+/// Pedestrians farther than this from the player are moved back near them.
+const RECYCLE: f32 = 190.0;
 
 struct Agent {
     path: usize,
@@ -288,8 +295,16 @@ impl Crowd {
             }
         }
         let out = vec![0.0; agents.len() * 4];
-        let mut c = Crowd { out, agents, paths };
-        c.step(0.0);
+        let mut cum = Vec::with_capacity(paths.len());
+        let mut acc = 0.0;
+        for p in &paths {
+            for w in p.windows(2) {
+                acc += ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt();
+            }
+            cum.push(acc);
+        }
+        let mut c = Crowd { out, agents, paths, widths, cum, seed: s };
+        c.step(0.0, None);
         c
     }
 
@@ -297,7 +312,44 @@ impl Crowd {
         self.agents.len()
     }
 
-    pub fn step(&mut self, dt: f32) {
+    /// Put agent `i` on a random walkway point 40..150 m from `c` (keeps it if none is found).
+    fn respawn(&mut self, i: usize, c: P2) {
+        let total = *self.cum.last().unwrap_or(&0.0);
+        if total <= 0.0 {
+            return;
+        }
+        for _ in 0..24 {
+            let r = rng(&mut self.seed) * total;
+            let path = self.cum.partition_point(|&x| x < r).min(self.paths.len() - 1);
+            let pts = &self.paths[path];
+            let seg = (rng(&mut self.seed) * (pts.len() - 1) as f32) as usize % (pts.len() - 1);
+            let t = rng(&mut self.seed);
+            let p = [pts[seg][0] + (pts[seg + 1][0] - pts[seg][0]) * t, pts[seg][1] + (pts[seg + 1][1] - pts[seg][1]) * t];
+            let d = ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt();
+            if !(40.0..150.0).contains(&d) {
+                continue;
+            }
+            let w = self.widths[path];
+            let side = if rng(&mut self.seed) < 0.5 { -1.0 } else { 1.0 };
+            let a = &mut self.agents[i];
+            a.path = path;
+            a.seg = seg;
+            a.t = t;
+            a.dir = if rng(&mut self.seed) < 0.5 { 1.0 } else { -1.0 };
+            a.lateral = if w > 3.0 { side * w } else { (rng(&mut self.seed) * 2.0 - 1.0) * w };
+            return;
+        }
+    }
+
+    pub fn step(&mut self, dt: f32, player: Option<P2>) {
+        if let Some(c) = player {
+            for i in 0..self.agents.len() {
+                let (x, z) = (self.out[i * 4], self.out[i * 4 + 1]);
+                if ((x - c[0]).powi(2) + (z - c[1]).powi(2)).sqrt() > RECYCLE {
+                    self.respawn(i, c);
+                }
+            }
+        }
         for (i, a) in self.agents.iter_mut().enumerate() {
             let path = &self.paths[a.path];
             let p0 = path[a.seg];
