@@ -71,7 +71,7 @@ interface WeatherLook {
   sat: number;
 }
 const LOOK: Record<Weather, WeatherLook> = {
-  clear: { turbidity: 6.5, rayleigh: 2.2, cloud: 0.32, cloudDensity: 0.45, sun: 1.0, fog: 1.0, shadow: 1.0, sat: 1.0 },
+  clear: { turbidity: 3.0, rayleigh: 3.0, cloud: 0.32, cloudDensity: 0.45, sun: 1.0, fog: 1.0, shadow: 1.0, sat: 1.0 },
   cloudy: { turbidity: 11, rayleigh: 1.4, cloud: 0.78, cloudDensity: 0.75, sun: 0.42, fog: 1.6, shadow: 0.55, sat: 0.9 },
   rain: { turbidity: 16, rayleigh: 0.8, cloud: 0.97, cloudDensity: 1.0, sun: 0.16, fog: 3.6, shadow: 0.25, sat: 0.78 },
   snow: { turbidity: 18, rayleigh: 0.9, cloud: 0.95, cloudDensity: 0.95, sun: 0.2, fog: 4.4, shadow: 0.3, sat: 0.72 },
@@ -221,7 +221,7 @@ export class Environment {
     u.sunPosition.value.copy(this.sunDir);
     u.turbidity.value = look.turbidity;
     u.rayleigh.value = look.rayleigh;
-    u.mieCoefficient.value = this.weather === 'clear' ? 0.0035 : 0.002;
+    u.mieCoefficient.value = this.weather === 'clear' ? 0.0018 : 0.002;
     u.mieDirectionalG.value = 0.76;
     u.cloudCoverage.value = look.cloud;
     u.cloudDensity.value = look.cloudDensity;
@@ -252,7 +252,8 @@ export class Environment {
     // Sun / moon light. A low winter sun: warm most of the day.
     const sunC = PAL.sunDay.clone().lerp(PAL.sunGold, gold).lerp(PAL.moon, night);
     this.sun.color.copy(sunC);
-    this.sun.intensity = THREE.MathUtils.lerp(THREE.MathUtils.lerp(3.0, 2.0, gold) * look.sun, 0.1, night);
+    // Daylight balance: a moderate sun with a strong blue sky fill (shadows stay readable, nothing glares).
+    this.sun.intensity = THREE.MathUtils.lerp(THREE.MathUtils.lerp(2.0, 1.7, gold) * look.sun, 0.1, night);
     this.sun.shadow.intensity = THREE.MathUtils.lerp(look.shadow, 0.6, night);
     if (night > 0.5) this.sunDir.copy(u.uMoonDir.value);
     if (this.sunDir.y < 0.12) this.sunDir.y = 0.12;
@@ -260,8 +261,8 @@ export class Environment {
     // Sky light comes from the IBL; the hemisphere light only adds a warm bounce.
     this.hemi.color.set(0xfff2e2);
     this.hemi.groundColor.set(0x6e6458).lerp(new THREE.Color(0x221e1a), night);
-    this.hemi.intensity = THREE.MathUtils.lerp(0.55, 0.28, night) * (0.7 + 0.3 * look.sun);
-    this.scene.environmentIntensity = THREE.MathUtils.lerp(0.62, 1.5, night) * (1 + overcast * 0.25);
+    this.hemi.intensity = THREE.MathUtils.lerp(0.36, 0.28, night) * (0.7 + 0.3 * look.sun);
+    this.scene.environmentIntensity = THREE.MathUtils.lerp(0.9, 1.5, night) * (1 + overcast * 0.25);
 
     const fogScale = look.fog * THREE.MathUtils.lerp(1, 1.4, night);
     this.fog.density = 0.0006 * fogScale;
@@ -275,15 +276,15 @@ export class Environment {
 
     const L = THREE.MathUtils.lerp;
     const g = this.grade;
-    g.exposure = L(L(1.0, 1.06, gold), 1.25, night) * (this.weather === 'snow' ? 0.82 : 1) * (1 - overcast * 0.06);
-    g.tint.setRGB(L(L(1.03, 1.1, gold), 1.0, night), L(L(1.0, 0.97, gold), 0.98, night), L(L(0.95, 0.84, gold), 1.04, night));
+    g.exposure = L(L(0.66, 0.82, gold), 1.25, night) * (this.weather === 'snow' ? 0.82 : 1) * (1 - overcast * 0.06);
+    g.tint.setRGB(L(L(1.08, 1.12, gold), 1.0, night), L(L(1.0, 0.96, gold), 0.98, night), L(L(0.8, 0.76, gold), 1.04, night));
     if (overcast > 0.3) g.tint.lerp(new THREE.Color(0.97, 1.0, 1.05), overcast * 0.6);
-    g.shadow.setRGB(L(0.97, 0.88, night), L(0.99, 0.96, night), L(1.03, 1.12, night));
+    g.shadow.setRGB(L(1.03, 0.88, night), L(0.98, 0.96, night), L(0.88, 1.12, night));
     g.high.setRGB(L(L(1.06, 1.14, gold), 1.12, night), L(L(1.0, 0.98, gold), 1.0, night), L(L(0.9, 0.8, gold), 0.86, night));
     g.contrast = L(1.06, 1.06, night) * (1 - overcast * 0.04);
-    g.saturation = L(L(0.95, 1.02, gold), 1.04, night) * look.sat;
+    g.saturation = L(L(1.08, 1.06, gold), 1.04, night) * look.sat;
     g.vignette = L(0.26, 0.4, night);
-    g.bloom = L(L(0.18, 0.3, gold), 0.72, night) * (this.weather === 'rain' ? 1.25 : 1);
+    g.bloom = L(L(0.06, 0.18, gold), 0.72, night) * (this.weather === 'rain' ? 1.25 : 1);
 
     // Rebuild the LUT + IBL when the light has changed noticeably.
     const key = `${this.weather}|${Math.round(hours * 12)}`;

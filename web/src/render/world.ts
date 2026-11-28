@@ -123,7 +123,7 @@ if (fRoof > 0.5) {
   vec3 tint = vec3(1.0);
   if (r < 0.18) { layer = 0.0; scale = 1.8; }
   else if (r < 0.34) { layer = 3.0; scale = 1.2; }
-  else if (r < 0.50) { layer = 2.0; scale = 2.5; tint = vec3(1.18, 1.17, 1.14); }
+  else if (r < 0.50) { layer = 2.0; scale = 2.5; tint = vec3(1.04, 1.03, 1.0); }
   else if (r < 0.63) { layer = 6.0; scale = 3.0; }
   else if (r < 0.72) { layer = 7.0; scale = 1.8; tint = vec3(1.05); }
   else if (r < 0.82) { layer = 4.0; scale = 1.2; }
@@ -283,7 +283,8 @@ else if (rK > 5.5 && rK < 6.5) { gl = 2.0; guv = vec2(rA, rX) / 2.0; }
 else if (rK > 6.5 && rK < 7.5) { gl = 1.0; guv = vec2(rA, rX) / 2.0; }
 vec3 rc = texture(tGroundA, vec3(guv, gl)).rgb;
 vec3 gNt = texture(tGroundN, vec3(guv, gl)).xyz * 2.0 - 1.0;
-if (gl < 0.5) rc *= 1.3 * (0.82 + 0.25 * kN(vec2(rA, rX) * 0.06 + 13.0));
+if (gl < 0.5) rc *= 0.95 * (0.82 + 0.25 * kN(vec2(rA, rX) * 0.06 + 13.0));
+else rc *= 0.85;
 if (rK < 3.5 || rK > 7.5) {
   float ax = abs(rX);
   float edge = rHw - ax;
@@ -378,7 +379,7 @@ export function createBuildingMaterial(night: { value: number }, tex: TextureSet
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FACADE_NORMAL}`)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += fEmis;');
   };
-  m.customProgramCacheKey = () => 'kta-facade-tex-7';
+  m.customProgramCacheKey = () => 'kta-facade-tex-8';
   return m;
 }
 
@@ -407,7 +408,7 @@ export function createRoadMaterial(tex: TextureSet) {
     s.vertexShader = s.vertexShader.replace('vGN = vec3(0.0, 1.0, 0.0);', 'vGN = vec3(0.0, 1.0, 0.0);\nvRoad = aRoad;');
     s.fragmentShader = s.fragmentShader.replace('varying vec3 vGN;', 'varying vec3 vGN;\nvarying vec4 vRoad;');
   };
-  m.customProgramCacheKey = () => 'kta-road-tex-2';
+  m.customProgramCacheKey = () => 'kta-road-tex-3';
   return m;
 }
 
@@ -417,10 +418,10 @@ export function createGroundMaterial(tex: TextureSet) {
     tex,
     `vec2 guv = vGP.xz / 2.0;
      vec3 gNt = texture(tGroundN, vec3(guv, 1.0)).xyz * 2.0 - 1.0;
-     diffuseColor.rgb = texture(tGroundA, vec3(guv, 1.0)).rgb * (0.88 + 0.2 * kN(vGP.xz * 0.08));`,
+     diffuseColor.rgb = texture(tGroundA, vec3(guv, 1.0)).rgb * 0.85 * (0.88 + 0.2 * kN(vGP.xz * 0.08));`,
     '',
   );
-  m.customProgramCacheKey = () => 'kta-ground-tex-2';
+  m.customProgramCacheKey = () => 'kta-ground-tex-3';
   return m;
 }
 

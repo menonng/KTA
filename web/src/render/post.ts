@@ -233,7 +233,7 @@ void main() {
   c += texture2D(tBloom, vUv).rgb * uBloom;
   // Eye adaptation: partial correction towards a mid-grey key from the adapted average luminance.
   float adapted = max(texture2D(tAdapt, vec2(0.5)).r, 1e-4);
-  float autoExp = clamp(pow(uKey / adapted, 0.5), 0.7, 1.35);
+  float autoExp = clamp(pow(uKey / adapted, 0.5), 0.75, 1.2);
   c *= uExposure * autoExp * uTint / 0.6;
   float L = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c *= mix(uShadow, uHigh, smoothstep(0.02, 0.8, L));
@@ -339,7 +339,7 @@ export class Post {
         uBloom: { value: 0.3 },
         tAdapt: { value: null },
         uFogScale: { value: 1 },
-        uKey: { value: 0.14 },
+        uKey: { value: 0.085 },
         uTexel: { value: new THREE.Vector2() },
       },
       depthTest: false,

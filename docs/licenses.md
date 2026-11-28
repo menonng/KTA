@@ -14,8 +14,8 @@
 | 3D 모델 (`web/public/models/*.glb`) | Poly Haven (exterior_aircon_unit, utility_box_02, plastic_monobloc_chair_01, plastic_crate_02, water_manhole_cover, rollershutter_door, covered_car) — 폴리곤 감소·텍스처 압축해 사용 | CC0 1.0 | 의무 없음(출처 기록만 유지) |
 | 나무껍질 텍스처 (`web/public/textures/tree_bark*.ktx2`) | Poly Haven (bark_brown_02) | CC0 1.0 | 의무 없음 |
 | 은행잎 텍스처 (`web/public/textures/tree_leaves.ktx2`) | 직접 제작(`tools/asset-pipeline/build_trees.mjs`가 그림) | 프로젝트 자체 | — |
-| 사람 모델 원본 (`web/public/models/humans.*`, `web/public/textures/human_*`) | MakeHuman 시스템 에셋 (makehumancommunity/makehuman: 베이스 메시 hm08, 체형 타깃, 기본 골격·스킨 가중치, 안구 메시·갈색 홍채 텍스처) — 체형 변형·옷·텍스처는 `tools/asset-pipeline/build_humans.mjs`가 만듦 | CC0 1.0 | 의무 없음(출처 기록만 유지). 프로그램 코드(AGPL)는 쓰지 않고 데이터 파일만 씀 |
-| 사람 동작 (걷기 35_01, 달리기 35_17, 서 있기 77_02) | CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), BVH 변환본(cgspeed / una-dinosauria/cmu-mocap) | 연구·상업 모두 자유 사용 | 감사 문구 권장: "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217." |
+| 사람 모델 (`web/public/models/people.*`, `web/public/textures/person_*`) | Microsoft Rocketbox Avatar Library (github.com/microsoft/Microsoft-Rocketbox) — 아바타 15종을 머리 교체·피부톤·옷 색 보정해 사용(`tools/asset-pipeline/people/build_people.mjs`) | MIT | 저작권·라이선스 고지 유지: `web/public/licenses/Microsoft-Rocketbox-LICENSE.txt` (Copyright (c) 2020 Microsoft) |
+| 사람 동작 (걷기 35_01, 달리기 35_17, 서 있기 77_02, Rocketbox 골격에 리타깃) | CMU Graphics Lab Motion Capture Database (mocap.cs.cmu.edu), BVH 변환본(cgspeed / una-dinosauria/cmu-mocap) | 연구·상업 모두 자유 사용 | 감사 문구 권장: "The data used in this project was obtained from mocap.cs.cmu.edu. The database was created with funding from NSF EIA-0196217." |
 | glTF Transform, meshoptimizer | donmccurdy/glTF-Transform, zeux/meshoptimizer | MIT | 빌드 도구로만 사용(모델 감소·압축). 게임은 three.js에 포함된 meshopt 디코더(MIT)를 씁니다 |
 | Basis Universal 트랜스코더 (`web/public/basis/`) | BinomialLLC/basis_universal (three.js 배포본) | Apache-2.0 | 저작권 고지 |
 | ktx2-encoder | gz65555/ktx2-encoder | MIT | 빌드 도구로만 사용 |

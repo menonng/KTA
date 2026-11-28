@@ -205,7 +205,35 @@ export function retarget(clip, s, p, body, fps, inPlace) {
       outF.set(q, o + 3 + bi * 4);
     });
   }
-  // Make the loop seamless: blend the root offset's start/end mismatch away.
+  // Level the gaze: capture subjects often look down at the floor. If the head's average pitch over the
+  // loop is more than 6 degrees down, lift the head (and the neck by half) by the excess.
+  {
+    const stride = 3 + BONES.length * 4;
+    const pitchOf = (k, bi) => {
+      const o = k * stride + 3 + bi * 4;
+      const [x, y, z, w] = outF.slice(o, o + 4);
+      // Rotate (0, 1, 0) by the quaternion.
+      const uy = 1 - 2 * (x * x + z * z);
+      const uz = 2 * (y * z + w * x);
+      return Math.atan2(uz, uy);
+    };
+    let mean = 0;
+    for (let k = 0; k < n; k++) mean += pitchOf(k, BI.head) / n;
+    const excess = mean - (6 * Math.PI) / 180;
+    if (excess > 0) {
+      const fix = (bi, a) => {
+        const qx = Math.sin(-a / 2), qw = Math.cos(-a / 2);
+        for (let k = 0; k < n; k++) {
+          const o = k * stride + 3 + bi * 4;
+          const [x, y, z, w] = outF.slice(o, o + 4);
+          // q' = qfix * q (rotation about world X applied after the bone's rotation).
+          outF.set([qw * x + qx * w, qw * y - qx * z, qw * z + qx * y, qw * w - qx * x], o);
+        }
+      };
+      fix(BI.head, excess);
+      fix(BI.neck, excess * 0.5);
+    }
+  }
   return { data: outF, frames: n, speed };
 }
 
