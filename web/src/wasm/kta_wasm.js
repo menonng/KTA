@@ -160,6 +160,16 @@ export class Game {
         return this;
     }
     /**
+     * Parked vehicles: x, z, yaw, type, paint seed per car.
+     * @returns {Float32Array}
+     */
+    parked_cars() {
+        const ret = wasm.game_parked_cars(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * Pointer to 6 floats: x, y, z, yaw, speed, phase.
      * @returns {number}
      */

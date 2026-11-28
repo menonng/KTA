@@ -48,6 +48,10 @@ export class Game {
     minimap_roads(): Float32Array;
     constructor(data: Uint8Array | number[], seed: number, crowd: number);
     /**
+     * Parked vehicles: x, z, yaw, type, paint seed per car.
+     */
+    parked_cars(): Float32Array;
+    /**
      * Pointer to 6 floats: x, y, z, yaw, speed, phase.
      */
     player_ptr(): number;
@@ -104,6 +108,7 @@ export interface InitOutput {
     readonly game_minimap_buildings: (a: number) => [number, number];
     readonly game_minimap_roads: (a: number) => [number, number];
     readonly game_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly game_parked_cars: (a: number) => [number, number];
     readonly game_player_ptr: (a: number) => number;
     readonly game_prop_cell_instances: (a: number, b: number, c: number) => [number, number];
     readonly game_prop_cells: (a: number) => [number, number];

@@ -253,6 +253,21 @@ pub const M_SHUTTER: u8 = 5;
 pub const M_COVEREDCAR: u8 = 6;
 pub const M_TREE: u8 = 7;
 
+/// Vehicle types (matches web/src/render/cars.ts CAR_TYPES) and their
+/// footprint half-extents (width, length) in meters.
+pub const CAR_HALF: [(f32, f32); 6] = [(0.93, 2.42), (0.81, 1.82), (0.95, 2.34), (0.93, 2.42), (0.88, 2.56), (1.26, 5.5)];
+
+fn pick_car(rng: &mut Rng, main: bool) -> u8 {
+    let r = rng.f();
+    if main {
+        // taxi, 1-ton truck, sedan, SUV
+        if r < 0.38 { 3 } else if r < 0.68 { 4 } else if r < 0.86 { 0 } else { 2 }
+    } else {
+        // sedan, compact (경차), SUV, 1-ton truck
+        if r < 0.38 { 0 } else if r < 0.62 { 1 } else if r < 0.88 { 2 } else { 4 }
+    }
+}
+
 pub struct Props {
     cells: HashMap<(i32, i32), Vec<Prim>>,
     /// Model instances per cell: model, x, y, z, yaw, sx, sy, sz.
@@ -261,6 +276,8 @@ pub struct Props {
     /// street cabinets.
     pub obstacles: Vec<([P2; 4], f32)>,
     pub wires: Vec<f32>,
+    /// Parked vehicles: x, z, yaw, type (see CAR_HALF), paint seed.
+    pub parked: Vec<f32>,
     /// x, z, yaw, width, length
     pub crosswalks: Vec<f32>,
     /// x, z of light pools under street lamps
@@ -391,6 +408,7 @@ impl Props {
             prim_count: 0,
             insts: HashMap::new(),
             obstacles: Vec::new(),
+            parked: Vec::new(),
         };
         p.place_buildings(&mut ctx);
         p.place_streets(&mut ctx);
@@ -843,23 +861,62 @@ impl Props {
                         self.wire(pa, pb, sag + span * 0.008, 8);
                     }
                 }
-                // Cars under covers parked along villa alleys.
+                // Cars parked along alleys (one or both kerbs); a few under covers.
                 if alley && half > 2.2 {
                     let mut spots = Vec::new();
-                    walk(29.0, 9.0, &mut |p, dir| spots.push((p, dir)));
+                    walk(6.2, 4.0, &mut |p, dir| spots.push((p, dir)));
+                    let both = half > 3.4;
+                    let main_side = if rng.f() < 0.5 { 1.0 } else { -1.0 };
                     for &(p, dir) in &spots {
-                        if rng.f() > 0.2 {
+                        for sd in [main_side, -main_side] {
+                            if sd != main_side && !both {
+                                continue;
+                            }
+                            let chance = if sd == main_side { 0.5 } else { 0.22 };
+                            if rng.f() > chance {
+                                continue;
+                            }
+                            let ty = pick_car(&mut rng, false);
+                            let (hw, hl) = CAR_HALF[ty as usize];
+                            let nrm = [dir[1] * sd, -dir[0] * sd];
+                            let off = half - hw - 0.2;
+                            let q = [p[0] + nrm[0] * off, p[1] + nrm[1] * off];
+                            if ctx.in_building(q, hw + 0.4) || near_junction(q, half + 6.5) {
+                                continue;
+                            }
+                            let yaw = yaw_of(dir) + if rng.f() < 0.5 { std::f32::consts::PI } else { 0.0 };
+                            if rng.f() < 0.12 {
+                                self.inst(M_COVEREDCAR, [q[0], 0.0, q[1]], yaw, [1.0, 1.0, 1.0]);
+                                self.obstacle(q, yaw, 0.86, 2.1, 1.4);
+                            } else {
+                                self.parked.extend_from_slice(&[q[0], q[1], yaw, ty as f32, rng.range(0.0, 1000.0).floor()]);
+                                self.obstacle(q, yaw, hw, hl, 1.4);
+                            }
+                        }
+                    }
+                }
+                // Occasional kerbside stops on two-way main streets (taxis, delivery trucks).
+                if major && !oneway && half < 9.0 {
+                    let mut spots = Vec::new();
+                    walk(23.0, 11.0, &mut |p, dir| spots.push((p, dir)));
+                    for &(p, dir) in &spots {
+                        if rng.f() > 0.16 {
                             continue;
                         }
+                        let ty = pick_car(&mut rng, true);
+                        let (hw, hl) = CAR_HALF[ty as usize];
+                        // Right-hand traffic: park on the right kerb of the travel direction.
                         let sd = if rng.f() < 0.5 { 1.0 } else { -1.0 };
-                        let nrm = [dir[1] * sd, -dir[0] * sd];
-                        let q = [p[0] + nrm[0] * (half - 1.0), p[1] + nrm[1] * (half - 1.0)];
-                        if ctx.in_building(q, 1.1) || near_junction(q, half + 7.0) {
+                        let nrm = [dir[1] * -sd, -dir[0] * -sd];
+                        let off = half - hw - 0.25;
+                        let q = [p[0] + nrm[0] * off, p[1] + nrm[1] * off];
+                        if near_junction(q, half + 10.0) || ctx.in_building(q, hw + 0.4) {
                             continue;
                         }
-                        let yaw = yaw_of(dir) + if rng.f() < 0.5 { std::f32::consts::PI } else { 0.0 };
-                        self.inst(M_COVEREDCAR, [q[0], 0.0, q[1]], yaw, [1.0, 1.0, 1.0]);
-                        self.obstacle(q, yaw, 0.86, 2.1, 1.4);
+                        let fwd = if sd > 0.0 { dir } else { [-dir[0], -dir[1]] };
+                        let yaw = yaw_of(fwd);
+                        self.parked.extend_from_slice(&[q[0], q[1], yaw, ty as f32, rng.range(0.0, 1000.0).floor()]);
+                        self.obstacle(q, yaw, hw, hl, 1.4);
                     }
                 }
                 // Service drops to nearby buildings.

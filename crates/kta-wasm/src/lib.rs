@@ -148,6 +148,11 @@ impl Game {
         self.w.props.cell_instances(cx, cz)
     }
 
+    /// Parked vehicles: x, z, yaw, type, paint seed per car.
+    pub fn parked_cars(&self) -> Vec<f32> {
+        self.w.props.parked.clone()
+    }
+
     /// Wire line segments: x0, y0, z0, x1, y1, z1, ...
     pub fn wires(&self) -> Vec<f32> {
         self.w.props.wires.clone()

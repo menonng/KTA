@@ -13,6 +13,7 @@ import { Post } from './render/post';
 import { loadTextures } from './render/textures';
 import { PropStreamer, buildStreetDetails } from './render/props';
 import { ModelLayer, MODEL, storefrontFurniture, type ModelInst } from './render/models';
+import { CarLayer, Traffic, buildLanes } from './render/traffic';
 import { Precipitation } from './render/weather';
 import { WEATHERS, type Weather } from './render/environment';
 
@@ -87,6 +88,15 @@ async function boot() {
     models.flush();
   });
   const post = new Post(renderer);
+  // Vehicles: parked (solid, from the core) and moving traffic on main roads.
+  const carLayer = new CarLayer(env.night, new Float32Array(game.parked_cars()));
+  scene.add(carLayer.group);
+  const traffic = new Traffic(buildLanes(new Float32Array(game.minimap_roads())));
+  const noTraffic = params.has('notraffic');
+  let trafficFrozen = false;
+  /** Debug: a line-up of every vehicle type (__kta.carShow). */
+  const showCars: { t: number; x: number; z: number; yaw: number; color: number }[] = [];
+
   const precip = new Precipitation();
   scene.add(precip.group);
   const setWeather = (w: Weather) => {
@@ -215,6 +225,23 @@ async function boot() {
     bench: null as unknown,
     signsReady: Promise.all([signsReady, modelsReady]),
     modelSpots: (m: number) => models.list(m).map((it) => ({ x: it.x, z: it.z, yaw: it.yaw })),
+    carShow: (x: number, z: number, yaw: number, gap = 3.2) => {
+      showCars.length = 0;
+      const colors = [0x1f3556, 0xe9e9e6, 0x6a1e22, 0xe8913a, 0x2a5fb8, 0x3aa34a];
+      for (let t = 0; t < 6; t++) {
+        // In a column along the heading, front to back.
+        const off = (t - 2.5) * gap;
+        showCars.push({ t, x: x + Math.sin(yaw) * off, z: z + Math.cos(yaw) * off, yaw, color: colors[t] });
+      }
+    },
+    freezeTraffic: (on: boolean) => (trafficFrozen = on),
+    laneSpot: () => {
+      const L = traffic.lanes.reduce((a, b) => (b.len > a.len ? b : a));
+      const i = (L.pts.length >> 2) << 1;
+      return { x: L.pts[i], z: L.pts[i + 1], yaw: Math.atan2(L.pts[i + 2] - L.pts[i], L.pts[i + 3] - L.pts[i + 1]) };
+    },
+    parkedSpots: () => carLayer.parkedCars.map((c) => ({ x: c.x, z: c.z, yaw: c.yaw, t: c.t })),
+    movingCars: () => traffic.cars.map((c) => ({ x: c.x, z: c.z, yaw: c.yaw, t: c.t, v: c.v })),
     signList: () => signs.map((g) => ({ x: g.x, z: g.z, yaw: g.yaw, v: g.vertical, st: atlas.signs[g.label]?.st })),
   };
   (window as unknown as { __kta: typeof api }).__kta = api;
@@ -240,6 +267,7 @@ async function boot() {
       propCells: props.cellCount,
       propMB: +(props.bytes / 1048576).toFixed(2),
       modelInstances: models.instances,
+      cars: carLayer.visible,
       modelTexMB: +(models.texBytes / 1048576).toFixed(2),
       wires: street.wireSegments,
       crosswalks: street.crosswalks,
@@ -296,6 +324,8 @@ async function boot() {
 
     props.update(px, pz, dt);
     models.update(px, pz);
+    if (!noTraffic && !trafficFrozen) traffic.update(dt, px, pz, cv);
+    carLayer.update(px, pz, noTraffic ? showCars : showCars.length ? [...traffic.cars, ...showCars] : traffic.cars, env.night.value, camera);
     camTarget.set(px, 1.45, pz);
     // Third-person camera with wall collision: pull in at once when a wall
     // is in the way, ease back out (no camera inside buildings in alleys).
