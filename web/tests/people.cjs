@@ -20,14 +20,17 @@ const path = require('path');
     await page.waitForTimeout(3000);
     await page.screenshot({ path: path.join(out, `people-${name}.png`) });
   }
-  // A pedestrian close up: stand next to the nearest one and look at them.
+  // Pedestrians close up: stand beside the nearest ones (to their side, not in their path) and look at them.
   await page.evaluate(() => window.__kta.freezeTraffic && window.__kta.freezeTraffic(true));
-  const ped = (await page.evaluate(() => window.__kta.nearestPeds(1)))[0];
-  if (ped) {
-    await page.evaluate(([x, z]) => window.__kta.teleport(x, z), [ped.x + Math.sin(ped.yaw) * 3.2, ped.z + Math.cos(ped.yaw) * 3.2]);
-    await page.evaluate(([yaw]) => window.__kta.setView(yaw, 0.08, 2.6), [ped.yaw + 2.4]);
-    await page.waitForTimeout(2500);
-    await page.screenshot({ path: path.join(out, 'people-ped.png') });
+  const peds = await page.evaluate(() => window.__kta.nearestPeds(3));
+  for (const [k, ped] of peds.slice(0, 2).entries()) {
+    const sx = Math.cos(ped.yaw) * 2.2, sz = -Math.sin(ped.yaw) * 2.2;
+    await page.evaluate(([x, z]) => window.__kta.teleport(x, z), [ped.x + sx, ped.z + sz]);
+    const now = (await page.evaluate(() => window.__kta.nearestPeds(1)))[0];
+    const look = Math.atan2(now.x - (ped.x + sx), now.z - (ped.z + sz));
+    await page.evaluate(([yaw]) => window.__kta.setView(yaw + Math.PI + 0.5, 0.12, 3.4), [look]);
+    await page.waitForTimeout(2000);
+    await page.screenshot({ path: path.join(out, `people-ped${k}.png`) });
   }
   console.log(JSON.stringify(await page.evaluate(() => window.__kta.stats())));
   await browser.close();

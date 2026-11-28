@@ -184,7 +184,8 @@ export class Environment {
     this.sun = new THREE.DirectionalLight(0xffffff, 2.5);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
-    this.sun.shadow.radius = 2.5;
+    // Sharp enough for thin casters (legs, poles): a wide filter or large biases erase them.
+    this.sun.shadow.radius = 1;
     const sc = this.sun.shadow.camera;
     sc.left = -38;
     sc.right = 38;
@@ -192,8 +193,8 @@ export class Environment {
     sc.bottom = -38;
     sc.near = 1;
     sc.far = 320;
-    this.sun.shadow.bias = -0.0006;
-    this.sun.shadow.normalBias = 0.04;
+    this.sun.shadow.bias = -0.00012;
+    this.sun.shadow.normalBias = 0.015;
     scene.add(this.sun, this.sun.target);
     scene.fog = null; // aerial perspective is applied in the post pass
   }
