@@ -295,6 +295,15 @@ pub struct Props {
     pub tactile: Vec<f32>,
     /// Median bus platforms (raised walking surface): four corners each, height.
     pub platforms: Vec<([P2; 4], f32)>,
+    /// Signalised junction sites: x, z, axis yaw (group 0 runs along it), id.
+    pub signal_sites: Vec<f32>,
+    /// Junction points of the sites: x, z, widest half width, site.
+    pub signal_points: Vec<f32>,
+    /// Signal heads: kind (0 vehicle 4-colour, 1 pedestrian), x, z, yaw (facing),
+    /// group, site, cantilever reach.
+    pub signal_heads: Vec<f32>,
+    /// Stop lines: x, z, yaw (along the road, away from the junction), width.
+    pub stop_lines: Vec<f32>,
     pub scratch: PropMesh,
     pub prim_count: usize,
 }
@@ -465,6 +474,10 @@ impl Props {
             lamps: Vec::new(),
             tactile: Vec::new(),
             platforms: Vec::new(),
+            signal_sites: Vec::new(),
+            signal_points: Vec::new(),
+            signal_heads: Vec::new(),
+            stop_lines: Vec::new(),
             scratch: PropMesh::default(),
             prim_count: 0,
             insts: HashMap::new(),
@@ -719,23 +732,100 @@ impl Props {
                 verts.entry(((p[0] * 2.0).round() as i32, (p[1] * 2.0).round() as i32)).or_default().push((ri, vi));
             }
         }
-        let mut junction_pts: Vec<P2> = Vec::new();
-        for (key, list) in &verts {
+        // Junction points in a fixed order (HashMap order is random per run).
+        let mut jlist: Vec<(P2, Vec<(usize, usize)>, Vec<usize>)> = Vec::new();
+        let mut keys: Vec<&(i32, i32)> = verts.keys().collect();
+        keys.sort();
+        for key in keys {
+            let list = &verts[key];
             let mut roads: Vec<usize> = list.iter().map(|x| x.0).collect();
             roads.sort();
             roads.dedup();
             if roads.len() < 2 {
                 continue;
             }
-            let jp = [key.0 as f32 * 0.5, key.1 as f32 * 0.5];
-            junction_pts.push(jp);
+            jlist.push(([key.0 as f32 * 0.5, key.1 as f32 * 0.5], list.clone(), roads));
+        }
+        let junction_pts: Vec<P2> = jlist.iter().map(|j| j.0).collect();
+        // Signalised junctions: an OSM signal node within 30 m and a main road
+        // through it. Points of one crossing (dual carriageways give several)
+        // are grouped into a site that runs one signal cycle.
+        let signal_nodes: Vec<P2> = m
+            .nodes
+            .iter()
+            .filter(|n| n.kind == crate::data::node::SIGNALS || n.kind == crate::data::node::CROSSING_SIGNALS)
+            .map(|n| [n.x, n.z])
+            .collect();
+        let main_arm = |roads: &[usize]| roads.iter().any(|&r| matches!(m.roads[r].kind & !ONEWAY, road::PRIMARY | road::SECONDARY | road::TERTIARY));
+        let signalised: Vec<bool> = jlist
+            .iter()
+            .map(|(jp, _, roads)| main_arm(roads) && signal_nodes.iter().any(|q| crate::geom::dist2(*q, *jp) < 30.0 * 30.0))
+            .collect();
+        let mut site_of: Vec<i32> = vec![-1; jlist.len()];
+        let mut sites: Vec<(P2, usize, f32, f32)> = Vec::new(); // centre sum, count, axis, axis width
+        for i in 0..jlist.len() {
+            if !signalised[i] || site_of[i] >= 0 {
+                continue;
+            }
+            let id = sites.len() as i32;
+            let mut stack = vec![i];
+            site_of[i] = id;
+            let mut sum = [0.0f32; 2];
+            let mut cnt = 0;
+            while let Some(k) = stack.pop() {
+                sum = [sum[0] + jlist[k].0[0], sum[1] + jlist[k].0[1]];
+                cnt += 1;
+                for j in 0..jlist.len() {
+                    if signalised[j] && site_of[j] < 0 && crate::geom::dist2(jlist[j].0, jlist[k].0) < 38.0 * 38.0 {
+                        site_of[j] = id;
+                        stack.push(j);
+                    }
+                }
+            }
+            sites.push((sum, cnt, 0.0, -1.0));
+        }
+        // Site axis = direction of its widest road (group 0 runs along it).
+        for (i, (jp, list, _)) in jlist.iter().enumerate() {
+            if site_of[i] < 0 {
+                continue;
+            }
+            for &(ri, vi) in list {
+                let r = &m.roads[ri];
+                let nb = if vi + 1 < r.pts.len() { vi + 1 } else { vi.wrapping_sub(1) };
+                if nb >= r.pts.len() {
+                    continue;
+                }
+                let st = &mut sites[site_of[i] as usize];
+                if r.width > st.3 {
+                    let d = [r.pts[nb][0] - jp[0], r.pts[nb][1] - jp[1]];
+                    st.2 = d[0].atan2(d[1]);
+                    st.3 = r.width;
+                }
+            }
+        }
+        for (k, st) in sites.iter().enumerate() {
+            let c = [st.0[0] / st.1 as f32, st.0[1] / st.1 as f32];
+            self.signal_sites.extend_from_slice(&[c[0], c[1], st.2, k as f32]);
+        }
+        let group_of = |site: usize, d: P2| -> f32 {
+            let a = d[0].atan2(d[1]);
+            let diff = (a - sites[site].2).rem_euclid(std::f32::consts::PI);
+            if diff < std::f32::consts::FRAC_PI_4 || diff > 3.0 * std::f32::consts::FRAC_PI_4 { 0.0 } else { 1.0 }
+        };
+        for (i, (jp, list, roads)) in jlist.iter().enumerate() {
+            let jp = *jp;
             let max_half = roads.iter().map(|&r| m.roads[r].width * 0.5).fold(0.0, f32::max);
+            let site = site_of[i];
+            if site >= 0 {
+                self.signal_points.extend_from_slice(&[jp[0], jp[1], max_half, site as f32]);
+            }
             for &(ri, vi) in list {
                 let r = &m.roads[ri];
                 let base = r.kind & !ONEWAY;
                 if !matches!(base, road::PRIMARY | road::SECONDARY | road::TERTIARY | road::LINK) {
                     continue;
                 }
+                let oneway = r.kind & ONEWAY != 0;
                 for nb in [vi.wrapping_sub(1), vi + 1] {
                     if nb >= r.pts.len() {
                         continue;
@@ -750,18 +840,38 @@ impl Props {
                     let dir = [d[0] / len, d[1] / len];
                     let cpos = [jp[0] + dir[0] * (off + 2.0), jp[1] + dir[1] * (off + 2.0)];
                     self.crosswalks.extend_from_slice(&[cpos[0], cpos[1], yaw_of(dir), r.width, 3.6]);
-                    if matches!(base, road::PRIMARY | road::SECONDARY) {
-                        // Traffic light on the right side, facing oncoming traffic.
-                        let side = [dir[1], -dir[0]];
-                        let tp = [cpos[0] - side[0] * (r.width * 0.5 + 0.9), cpos[1] - side[1] * (r.width * 0.5 + 0.9)];
-                        let yaw = yaw_of(dir);
-                        self.cyl([tp[0], 0.0, tp[1]], 0.1, 5.2, 6, rgb(0x5b6066));
-                        let arm = [tp[0] + side[0] * 2.2, tp[1] + side[1] * 2.2];
-                        self.bx([tp[0] + side[0] * 1.1, 5.0, tp[1] + side[1] * 1.1], yaw_of(side), [0.1, 0.1, 2.2], rgb(0x5b6066));
-                        self.bx([arm[0], 4.55, arm[1]], yaw, [1.2, 0.42, 0.3], rgb(0x1e2124));
-                        let red = [arm[0] + dir[0] * 0.16, arm[1] + dir[1] * 0.16];
-                        self.bx([red[0] - side[0] * 0.38, 4.62, red[1] - side[1] * 0.38], yaw, [0.24, 0.24, 0.02], glow(0xff3020));
-                        self.bx([red[0] + side[0] * 0.38, 4.62, red[1] + side[1] * 0.38], yaw, [0.24, 0.24, 0.02], glow(0x20e070));
+                    if site < 0 {
+                        continue;
+                    }
+                    let site = site as usize;
+                    let g = group_of(site, dir);
+                    // Right-hand side of traffic heading along dir (x right = (-dz, dx)).
+                    let right = [-dir[1], dir[0]];
+                    let half = r.width * 0.5;
+                    // Traffic on this arm: leaving the junction along dir (nb after the
+                    // junction vertex on a one-way) or arriving (nb before it).
+                    let leaving = !oneway || nb == vi + 1;
+                    let arriving = !oneway || nb + 1 == vi;
+                    if leaving && matches!(base, road::PRIMARY | road::SECONDARY | road::TERTIARY) {
+                        // Korean practice: the vehicle signal stands beyond the
+                        // junction (far side), on a cantilever over the lanes, facing
+                        // the traffic that crosses towards it.
+                        let pole = [cpos[0] + dir[0] * 3.4 + right[0] * (half + 0.9), cpos[1] + dir[1] * 3.4 + right[1] * (half + 0.9)];
+                        let reach = (if oneway { half } else { half * 0.5 + 1.5 }).clamp(3.0, 7.5);
+                        self.signal_heads.extend_from_slice(&[0.0, pole[0], pole[1], yaw_of([-dir[0], -dir[1]]), g, site as f32, reach]);
+                        self.obstacle(pole, 0.0, 0.16, 0.16, 6.0);
+                    }
+                    if arriving {
+                        // Stop line 1.5 m before the crosswalk, across the arriving lanes.
+                        let w = if oneway { r.width - 0.6 } else { half - 0.4 };
+                        let lat = if oneway { 0.0 } else { -half * 0.5 };
+                        let sp = [cpos[0] + dir[0] * 3.3 + right[0] * lat, cpos[1] + dir[1] * 3.3 + right[1] * lat];
+                        self.stop_lines.extend_from_slice(&[sp[0], sp[1], yaw_of(dir), w]);
+                    }
+                    // Pedestrian signals at both ends of the crossing, each facing the far end.
+                    for sd in [-1.0f32, 1.0] {
+                        let e = [cpos[0] + right[0] * sd * (half + 0.7) + dir[0] * 2.3, cpos[1] + right[1] * sd * (half + 0.7) + dir[1] * 2.3];
+                        self.signal_heads.extend_from_slice(&[1.0, e[0], e[1], yaw_of([-right[0] * sd, -right[1] * sd]), g, site as f32, 0.0]);
                     }
                 }
             }

@@ -14,6 +14,7 @@ import { loadTextures } from './render/textures';
 import { PropStreamer, buildStreetDetails } from './render/props';
 import { ModelLayer, MODEL, storefrontFurniture, type ModelInst } from './render/models';
 import { CarLayer, Traffic, buildLanes } from './render/traffic';
+import { Signals } from './render/signals';
 import { Precipitation } from './render/weather';
 import { WEATHERS, type Weather } from './render/environment';
 
@@ -92,6 +93,16 @@ async function boot() {
   const carLayer = new CarLayer(env.night, new Float32Array(game.parked_cars()));
   scene.add(carLayer.group);
   const traffic = new Traffic(buildLanes(new Float32Array(game.minimap_roads())));
+  // Junction signals (4-aspect vehicle heads, pedestrian heads with countdown, stop lines).
+  const signals = new Signals(
+    new Float32Array(game.signal_sites()),
+    new Float32Array(game.signal_points()),
+    new Float32Array(game.signal_heads()),
+    new Float32Array(game.stop_lines()),
+    (x, z) => game.ground_y(x, z),
+  );
+  scene.add(signals.group);
+  traffic.setSignals(signals);
   const noTraffic = params.has('notraffic');
   let trafficFrozen = false;
   /** Debug: a line-up of every vehicle type (__kta.carShow). */
@@ -219,6 +230,9 @@ async function boot() {
       return Array.from({ length: a.length / 4 }, (_, i) => [a[i * 4], a[i * 4 + 1], a[i * 4 + 2], a[i * 4 + 3], game.stop_name(i)]);
     },
     groundY: (x: number, z: number) => game.ground_y(x, z),
+    /** Signal sites: [x, z, axis]. */
+    signalSites: () => signals.sites.map((s) => [s.x, s.z, s.axis]),
+    signalHeads: () => Array.from(game.signal_heads()),
     stats: () => collectStats(),
     debugBuffers: () => {
       const seen = new Set<unknown>();
@@ -374,6 +388,7 @@ async function boot() {
     props.update(px, pz, dt);
     models.update(px, pz);
     models.setNight(env.night.value);
+    signals.update(dt);
     if (!noTraffic && !trafficFrozen) traffic.update(dt, px, pz, cv);
     carLayer.update(px, pz, noTraffic ? showCars : showCars.length ? [...traffic.cars, ...showCars] : traffic.cars, env.night.value, camera);
     camTarget.set(px, 1.45 + py, pz);

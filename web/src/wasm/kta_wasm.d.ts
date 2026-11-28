@@ -81,6 +81,18 @@ export class Game {
      */
     roads_desc(): Uint32Array;
     /**
+     * Signal heads: kind (0 vehicle, 1 pedestrian), x, z, yaw, group, site, reach.
+     */
+    signal_heads(): Float32Array;
+    /**
+     * Junction points of signal sites: x, z, widest half width, site.
+     */
+    signal_points(): Float32Array;
+    /**
+     * Signalised junction sites: x, z, axis yaw, id.
+     */
+    signal_sites(): Float32Array;
+    /**
      * Flattened signs: x, y, z, yaw, w, h, label, flags (bit 0 vertical, bits 1-3 mount).
      */
     signs(): Float32Array;
@@ -94,6 +106,10 @@ export class Game {
      */
     spill_desc(): Uint32Array;
     step(dt: number, bits: number, fx: number, fz: number): void;
+    /**
+     * Stop lines: x, z, yaw, width.
+     */
+    stop_lines(): Float32Array;
     stop_name(i: number): string;
     /**
      * Bus stops: x, z, yaw, kind per stop (kta_core::data::stop).
@@ -138,11 +154,15 @@ export interface InitOutput {
     readonly game_prop_cells: (a: number) => [number, number];
     readonly game_prop_count: (a: number) => number;
     readonly game_roads_desc: (a: number) => [number, number];
+    readonly game_signal_heads: (a: number) => [number, number];
+    readonly game_signal_points: (a: number) => [number, number];
+    readonly game_signal_sites: (a: number) => [number, number];
     readonly game_signs: (a: number) => [number, number];
     readonly game_skirt_desc: (a: number) => [number, number];
     readonly game_spawn: (a: number, b: number, c: number) => void;
     readonly game_spill_desc: (a: number) => [number, number];
     readonly game_step: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly game_stop_lines: (a: number) => [number, number];
     readonly game_stop_name: (a: number, b: number) => [number, number];
     readonly game_stops: (a: number) => [number, number];
     readonly game_tactile: (a: number) => [number, number];

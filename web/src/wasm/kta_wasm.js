@@ -245,6 +245,36 @@ export class Game {
         return v1;
     }
     /**
+     * Signal heads: kind (0 vehicle, 1 pedestrian), x, z, yaw, group, site, reach.
+     * @returns {Float32Array}
+     */
+    signal_heads() {
+        const ret = wasm.game_signal_heads(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * Junction points of signal sites: x, z, widest half width, site.
+     * @returns {Float32Array}
+     */
+    signal_points() {
+        const ret = wasm.game_signal_points(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * Signalised junction sites: x, z, axis yaw, id.
+     * @returns {Float32Array}
+     */
+    signal_sites() {
+        const ret = wasm.game_signal_sites(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * Flattened signs: x, y, z, yaw, w, h, label, flags (bit 0 vertical, bits 1-3 mount).
      * @returns {Float32Array}
      */
@@ -289,6 +319,16 @@ export class Game {
      */
     step(dt, bits, fx, fz) {
         wasm.game_step(this.__wbg_ptr, dt, bits, fx, fz);
+    }
+    /**
+     * Stop lines: x, z, yaw, width.
+     * @returns {Float32Array}
+     */
+    stop_lines() {
+        const ret = wasm.game_stop_lines(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
     }
     /**
      * @param {number} i

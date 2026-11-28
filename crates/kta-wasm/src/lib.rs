@@ -72,6 +72,26 @@ impl Game {
         self.w.map.stops.get(i as usize).map(|s| self.w.map.name(s.name).to_string()).unwrap_or_default()
     }
 
+    /// Signalised junction sites: x, z, axis yaw, id.
+    pub fn signal_sites(&self) -> Vec<f32> {
+        self.w.props.signal_sites.clone()
+    }
+
+    /// Junction points of signal sites: x, z, widest half width, site.
+    pub fn signal_points(&self) -> Vec<f32> {
+        self.w.props.signal_points.clone()
+    }
+
+    /// Signal heads: kind (0 vehicle, 1 pedestrian), x, z, yaw, group, site, reach.
+    pub fn signal_heads(&self) -> Vec<f32> {
+        self.w.props.signal_heads.clone()
+    }
+
+    /// Stop lines: x, z, yaw, width.
+    pub fn stop_lines(&self) -> Vec<f32> {
+        self.w.props.stop_lines.clone()
+    }
+
     /// Point features (signals, crossings): x, z, kind.
     pub fn nodes(&self) -> Vec<f32> {
         self.w.map.nodes.iter().flat_map(|n| [n.x, n.z, n.kind as f32]).collect()

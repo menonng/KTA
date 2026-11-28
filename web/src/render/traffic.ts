@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { carParts, CAR_TYPES, paintFor } from './cars';
+import { GREEN, RED, type Signals } from './signals';
 
 /** Footprint half-extents (width, length); same as CAR_HALF in props.rs. */
 export const CAR_HALF: [number, number][] = [
@@ -35,6 +36,8 @@ interface Lane {
   vmax: number;
   next: number[];
   bus: boolean;
+  /** Signal-controlled stop line on this lane: distance along it, site, group. */
+  stop?: { s: number; site: number; group: number };
 }
 
 interface Mover {
@@ -230,6 +233,40 @@ export class Traffic {
   private weights: Float32Array;
   private total = 0;
 
+  private signals: Signals | null = null;
+
+  /** Attach junction signals: lanes ending at a signalised junction get a stop line. */
+  setSignals(sig: Signals) {
+    this.signals = sig;
+    for (const L of this.lanes) {
+      const m = L.pts.length;
+      const ex = L.pts[m - 2];
+      const ez = L.pts[m - 1];
+      let hx = ex - L.pts[m - 4];
+      let hz = ez - L.pts[m - 3];
+      const hl = Math.hypot(hx, hz) || 1;
+      hx /= hl;
+      hz /= hl;
+      let best = -1;
+      let bd = 26;
+      sig.points.forEach((p, i) => {
+        const d = Math.hypot(p.x - ex, p.z - ez);
+        // Ahead of the lane end (the lane runs into this junction).
+        if (d < bd && (p.x - ex) * hx + (p.z - ez) * hz > -1) {
+          bd = d;
+          best = i;
+        }
+      });
+      if (best < 0) continue;
+      const p = sig.points[best];
+      // Stop line: crossing centre at half + 4.5 m from the junction point, 1.8 m half
+      // length, line 1.5 m before it.
+      const s = L.len - Math.max(0, p.half + 7.8 - bd);
+      if (s < 4) continue;
+      L.stop = { s, site: p.site, group: sig.groupOf(p.site, hx, hz) };
+    }
+  }
+
   constructor(readonly lanes: Lane[]) {
     this.weights = new Float32Array(lanes.length);
     let acc = 0;
@@ -352,6 +389,14 @@ export class Traffic {
       // Mutual block (two cars nose to nose across a junction): the lower index goes.
       if (c.blockedBy >= 0 && cars[c.blockedBy].blockedBy === i && i < c.blockedBy) gap = 1e9;
       const L = c.lane >= 0 ? this.lanes[c.lane] : null;
+      // Red (or a yellow there is room to stop for): the stop line is an obstacle.
+      if (L?.stop && this.signals && c.s < L.stop.s + 0.3) {
+        const st = this.signals.state(L.stop.site, L.stop.group);
+        if (st !== GREEN) {
+          const g = L.stop.s - c.s - CAR_HALF[c.t][1] + 2.2;
+          if (st === RED || g > (c.v * c.v) / (2 * 4.5) + 1.0) gap = Math.min(gap, g);
+        }
+      }
       let vmax = L ? L.vmax : 5.5;
       // Slow down for the junction curve ahead.
       if (L && L.len - c.s < 18) vmax = Math.min(vmax, 5.5 + (L.len - c.s) * 0.4);
