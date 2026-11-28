@@ -52,6 +52,10 @@ export class Game {
      */
     player_ptr(): number;
     /**
+     * Model instances of one prop cell: model, x, y, z, yaw, sx, sy, sz per instance.
+     */
+    prop_cell_instances(cx: number, cz: number): Float32Array;
+    /**
      * Prop cells: flattened (cx, cz, primitive count). Cell size is 128 m.
      */
     prop_cells(): Int32Array;
@@ -101,6 +105,7 @@ export interface InitOutput {
     readonly game_minimap_roads: (a: number) => [number, number];
     readonly game_new: (a: number, b: number, c: number, d: number) => [number, number, number];
     readonly game_player_ptr: (a: number) => number;
+    readonly game_prop_cell_instances: (a: number, b: number, c: number) => [number, number];
     readonly game_prop_cells: (a: number) => [number, number];
     readonly game_prop_count: (a: number) => number;
     readonly game_roads_desc: (a: number) => [number, number];

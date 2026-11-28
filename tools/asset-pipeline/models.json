@@ -1,0 +1,59 @@
+{
+  "source": "Poly Haven (https://polyhaven.com), CC0 1.0",
+  "note": "fit: longest horizontal extent in metres after normalising; tris: target triangle count after simplification; tex: texture size (px).",
+  "models": {
+    "aircon": {
+      "id": "exterior_aircon_unit",
+      "fit": 0.86,
+      "tris": 150,
+      "tex": 512,
+      "note": "실외기 (wall-hung outdoor AC unit)",
+      "maxErr": 0.2
+    },
+    "powerbox": {
+      "id": "utility_box_02",
+      "fit": 0.92,
+      "tris": 240,
+      "tex": 512,
+      "note": "보도 위 전기·통신함"
+    },
+    "chair": {
+      "id": "plastic_monobloc_chair_01",
+      "fit": 0.56,
+      "tris": 260,
+      "tex": 256,
+      "note": "편의점 앞 플라스틱 의자",
+      "maxErr": 0.2
+    },
+    "crate": {
+      "id": "plastic_crate_02",
+      "fit": 0.52,
+      "tris": 160,
+      "tex": 256,
+      "note": "음료 상자 (쌓아 둠)",
+      "maxErr": 0.2
+    },
+    "manhole": {
+      "id": "water_manhole_cover",
+      "fit": 0.7,
+      "tris": 64,
+      "tex": 256,
+      "note": "맨홀 뚜껑",
+      "maxErr": 0.5
+    },
+    "shutter": {
+      "id": "rollershutter_door",
+      "fit": 1.08,
+      "tris": 220,
+      "tex": 512,
+      "note": "빈 점포의 셔터 (1.08 m 폭 한 장, 게임에서 점포 폭에 맞춰 늘림)"
+    },
+    "coveredcar": {
+      "id": "covered_car",
+      "fit": 4.38,
+      "tris": 900,
+      "tex": 512,
+      "note": "골목의 덮개 씌운 차"
+    }
+  }
+}

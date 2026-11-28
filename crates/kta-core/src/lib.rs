@@ -31,9 +31,9 @@ impl World {
         let map = data::parse(bytes)?;
         let chunks = mesh::build_chunks(&map, 96.0);
         let roads = mesh::build_roads(&map);
-        let grid = SegGrid::new(&map, 12.0);
         let crowd = Crowd::new(&map, crowd, seed);
         let props = Props::new(&map);
+        let grid = SegGrid::with_obstacles(&map, 12.0, &props.obstacles);
         let skirt = props::ao_skirts(&map);
         let spill = props::light_spill(&map);
         Ok(World { map, chunks, roads, grid, player: Player::default(), crowd, props, skirt, spill })

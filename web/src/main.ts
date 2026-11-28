@@ -12,6 +12,7 @@ import { Hud } from './hud/hud';
 import { Post } from './render/post';
 import { loadTextures } from './render/textures';
 import { PropStreamer, buildStreetDetails } from './render/props';
+import { ModelLayer, MODEL, storefrontFurniture, type ModelInst } from './render/models';
 
 const params = new URLSearchParams(location.search);
 const BENCH = params.has('bench');
@@ -67,6 +68,22 @@ async function boot() {
   });
   const street = buildStreetDetails(game, scene, env.night);
   const props = new PropStreamer(game, memory, scene, env.night);
+  // CC0 models (Poly Haven): streamed with the prop cells, plus static sets.
+  const models = new ModelLayer(renderer);
+  scene.add(models.group);
+  props.models = models;
+  const shutters: ModelInst[] = signs
+    .filter((g) => g.mount === 6)
+    .map((g) => ({ m: MODEL.shutter, x: g.x, y: 0.1, z: g.z, yaw: g.yaw, sx: g.w / 1.08, sy: g.h / 2.4, sz: 1 }));
+  const cvs = signs
+    .map((g, i) => ({ g, i }))
+    .filter(({ g }) => g.mount === 0 && !g.vertical && g.y < 5 && /^(GG24|CUZ|SIX-TEN)/.test(atlas.signs[g.label]?.t ?? ''))
+    .map(({ g, i }) => ({ x: g.x, z: g.z, yaw: g.yaw, w: g.w, seed: i * 2654435761 }));
+  const modelsReady = models.load().then(() => {
+    models.set('shutters', shutters);
+    models.set('storefront', storefrontFurniture(cvs));
+    models.flush();
+  });
   const post = new Post(renderer);
 
   const player = new Protagonist();
@@ -185,7 +202,8 @@ async function boot() {
       return sg ? { x: sg.x, z: sg.z, yaw: sg.yaw, vertical: sg.vertical } : null;
     },
     bench: null as unknown,
-    signsReady,
+    signsReady: Promise.all([signsReady, modelsReady]),
+    modelSpots: (m: number) => models.list(m).map((it) => ({ x: it.x, z: it.z, yaw: it.yaw })),
     signList: () => signs.map((g) => ({ x: g.x, z: g.z, yaw: g.yaw, v: g.vertical, st: atlas.signs[g.label]?.st })),
   };
   (window as unknown as { __kta: typeof api }).__kta = api;
@@ -210,6 +228,8 @@ async function boot() {
       propPrims: game.prop_count(),
       propCells: props.cellCount,
       propMB: +(props.bytes / 1048576).toFixed(2),
+      modelInstances: models.instances,
+      modelTexMB: +(models.texBytes / 1048576).toFixed(2),
       wires: street.wireSegments,
       crosswalks: street.crosswalks,
       lamps: street.lamps,
@@ -264,6 +284,7 @@ async function boot() {
     if (world.spill) world.spill.visible = fill.visible;
 
     props.update(px, pz, dt);
+    models.update(px, pz);
     camTarget.set(px, 1.45, pz);
     // Third-person camera with wall collision: pull in at once when a wall
     // is in the way, ease back out (no camera inside buildings in alleys).

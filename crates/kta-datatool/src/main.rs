@@ -664,7 +664,13 @@ fn main() {
                         vertical: false,
                 mount: 0,
                     });
-                    if floor == 0 && matches!(brand.as_str(), "식스텐" | "GG24" | "CUZ") {
+                    if floor == 0 && matches!(brand.as_str(), "GG24" | "CUZ") {
+                        // Fabric canopy under the fascia (bronze / dark grey on the real stores).
+                        let li = push_label(&mut labels, Label { kind: "awning", cat: "brand".into(), brand: brand.clone(), fg, bg, w: 1.2, h: 0.62, seed, floor: 0, tenants: vec![] });
+                        let p = [a[0] + dir[0] * s + nrm[0] * 0.02, a[1] + dir[1] * s + nrm[1] * 0.02];
+                        signs.push(Sign { x: p[0], z: p[1], y: 2.66, yaw: nrm[0].atan2(nrm[1]), w: (w - 0.1).min(9.0), h: 1.15, label: li, vertical: false, mount: 2 });
+                    }
+                    if floor == 0 && brand == "식스텐" {
                         // Printed band over the windows (logo + 삼각김밥 ...), as on the real shop fronts.
                         let li = push_label(&mut labels, Label { kind: "band", cat: "brand".into(), brand: brand.clone(), fg, bg, w, h: 0.4, seed, floor: 0, tenants: vec![] });
                         signs.push(Sign { x: a[0] + dir[0] * s + nrm[0] * 0.31, z: a[1] + dir[1] * s + nrm[1] * 0.31, y: 2.48, yaw: nrm[0].atan2(nrm[1]), w, h: 0.4, label: li, vertical: false, mount: 0 });
@@ -832,7 +838,10 @@ fn main() {
                     continue;
                 }
                 if rnd() < 0.06 {
-                    continue; // empty unit
+                    // Empty unit: roller shutter down (mount 6 = shutter model, no artwork).
+                    let p = [a[0] + dir[0] * s + nrm[0] * 0.16, a[1] + dir[1] * s + nrm[1] * 0.16];
+                    signs.push(Sign { x: p[0], z: p[1], y: 0.0, yaw: nrm[0].atan2(nrm[1]), w: w.min(len - 0.3), h: 2.7, label: 0, vertical: false, mount: 6 });
+                    continue;
                 }
                 occ.push((s - w * 0.5, s + w * 0.5, 0));
                 let p = [a[0] + dir[0] * s + nrm[0] * 0.25, a[1] + dir[1] * s + nrm[1] * 0.25];

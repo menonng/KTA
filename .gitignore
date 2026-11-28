@@ -6,3 +6,5 @@
 /tools/signgen/node_modules
 /tools/signgen/work
 /tools/signgen/fonts.css
+/tools/asset-pipeline/node_modules
+/tools/asset-pipeline/work

@@ -243,8 +243,23 @@ impl Grid {
     }
 }
 
+/// Instanced CC0 models (web/public/models, order of MODEL_NAMES in the client).
+pub const M_AIRCON: u8 = 0;
+pub const M_POWERBOX: u8 = 1;
+pub const M_CHAIR: u8 = 2;
+pub const M_CRATE: u8 = 3;
+pub const M_MANHOLE: u8 = 4;
+pub const M_SHUTTER: u8 = 5;
+pub const M_COVEREDCAR: u8 = 6;
+pub const M_TREE: u8 = 7;
+
 pub struct Props {
     cells: HashMap<(i32, i32), Vec<Prim>>,
+    /// Model instances per cell: model, x, y, z, yaw, sx, sy, sz.
+    insts: HashMap<(i32, i32), Vec<[f32; 8]>>,
+    /// Solid footprints (corner quads) for the collision grid: parked cars,
+    /// street cabinets.
+    pub obstacles: Vec<([P2; 4], f32)>,
     pub wires: Vec<f32>,
     /// x, z, yaw, width, length
     pub crosswalks: Vec<f32>,
@@ -374,6 +389,8 @@ impl Props {
             lamps: Vec::new(),
             scratch: PropMesh::default(),
             prim_count: 0,
+            insts: HashMap::new(),
+            obstacles: Vec::new(),
         };
         p.place_buildings(&mut ctx);
         p.place_streets(&mut ctx);
@@ -384,6 +401,25 @@ impl Props {
     fn add(&mut self, pr: Prim) {
         let key = ((pr.pos[0] / CELL).floor() as i32, (pr.pos[2] / CELL).floor() as i32);
         self.cells.entry(key).or_default().push(pr);
+    }
+
+    fn inst(&mut self, model: u8, pos: [f32; 3], yaw: f32, scale: [f32; 3]) {
+        let key = ((pos[0] / CELL).floor() as i32, (pos[2] / CELL).floor() as i32);
+        self.insts.entry(key).or_default().push([model as f32, pos[0], pos[1], pos[2], yaw, scale[0], scale[1], scale[2]]);
+    }
+
+    /// Box footprint centred on c, rotated by yaw (local x = width, z = depth).
+    fn obstacle(&mut self, c: P2, yaw: f32, hx: f32, hz: f32, height: f32) {
+        let (sn, cs) = yaw.sin_cos();
+        let ax = [cs, -sn];
+        let az = [sn, cs];
+        let corner = |i: f32, j: f32| [c[0] + ax[0] * hx * i + az[0] * hz * j, c[1] + ax[1] * hx * i + az[1] * hz * j];
+        self.obstacles.push(([corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)], height));
+    }
+
+    /// Model instances of one cell, flattened (8 floats each).
+    pub fn cell_instances(&self, cx: i32, cz: i32) -> Vec<f32> {
+        self.insts.get(&(cx, cz)).map(|v| v.iter().flatten().copied().collect()).unwrap_or_default()
     }
 
     fn bx(&mut self, pos: [f32; 3], yaw: f32, size: [f32; 3], color: [u8; 4]) {
@@ -441,9 +477,8 @@ impl Props {
                     }
                     if rng.f() < if b.kind == kind::RESIDENTIAL { 0.22 } else { 0.12 } {
                         let u = rng.range(0.6, len - 0.6);
-                        let p = at(u, 0.17);
-                        self.bx([p[0], f as f32 * 3.3 + 0.18, p[1]], yaw, [0.82, 0.58, 0.32], rgb(0xd4d2ca));
-                        self.bx([p[0] + nrm[0] * 0.17, f as f32 * 3.3 + 0.26, p[1] + nrm[1] * 0.17], yaw, [0.42, 0.42, 0.02], rgb(0x55575a));
+                        let p = at(u, 0.21);
+                        self.inst(M_AIRCON, [p[0], f as f32 * 3.3 - 0.08, p[1]], yaw, [1.0, 1.0, 1.0]);
                         ac_left -= 1;
                     }
                 }
@@ -490,6 +525,16 @@ impl Props {
                 self.cyl([q[0], 0.0, q[1]], 0.055, h + 0.6, 5, rgb(if rng.f() < 0.5 { 0xcfcfcf } else { 0x6b6b6b }));
             }
 
+            // Outdoor AC units grouped on flat roofs.
+            if h >= 6.0 && area > 60.0 && rng.f() < 0.55 {
+                let n = 1 + (rng.f() * 3.0) as usize;
+                for k in 0..n {
+                    let q = [c[0] + rng.range(-2.0, 2.0) + k as f32 * 0.95, c[1] + rng.range(-2.0, 2.0)];
+                    if crate::geom::point_in_polygon(q, &b.pts) {
+                        self.inst(M_AIRCON, [q[0], h, q[1]], rng.range(0.0, 6.28), [1.0, 1.0, 1.0]);
+                    }
+                }
+            }
             // Balconies on villa-type buildings (빌라), longest street-facing edge.
             if villa && rng.f() < 0.5 {
                 if let Some((len, e, _)) = best_edge {
@@ -651,19 +696,9 @@ impl Props {
                             continue;
                         }
                         let mut tr = Rng::new((q[0] * 13.0) as i32 as u32 ^ (q[1] * 7.0) as i32 as u32);
-                        let th = tr.range(2.6, 3.4);
-                        self.cyl([q[0], 0.0, q[1]], 0.13, th + 1.0, 6, rgb(0x4a3a2c));
-                        let leaf = tr.pick(&[0xd8b02a, 0xe2c23f, 0xc99a2e, 0xb8a640, 0xd6a52a]);
-                        // Ginkgo: tall, slightly conical crown made of rounded clusters.
-                        for k in 0..5 {
-                            let lift = k as f32 * 0.75;
-                            let spread = 1.0 - k as f32 * 0.15;
-                            let o = [tr.range(-0.8, 0.8) * spread, tr.range(-0.2, 0.3), tr.range(-0.8, 0.8) * spread];
-                            let s = tr.range(1.7, 2.3) * spread;
-                            let shade = [leaf >> 16 & 0xff, leaf >> 8 & 0xff, leaf & 0xff].map(|c| ((c as f32) * tr.range(0.86, 1.06)).min(255.0) as u32);
-                            let col = shade[0] << 16 | shade[1] << 8 | shade[2];
-                            self.ico([q[0] + o[0], th + 1.0 + lift + o[1], q[1] + o[2]], tr.range(0.0, 3.0), [s, s * 0.9, s], rgb(col));
-                        }
+                        // Ginkgo street tree (instanced model, yellow in late November).
+                        let sc = tr.range(0.85, 1.15);
+                        self.inst(M_TREE, [q[0], 0.1, q[1]], tr.range(0.0, 6.28), [sc, sc * tr.range(0.92, 1.12), sc]);
                         // Tree guard grate
                         self.bx([q[0], 0.0, q[1]], yaw_of(dir), [1.2, 0.1, 1.2], rgb(0x3b3b3b));
                     }
@@ -685,6 +720,32 @@ impl Props {
                         self.bx([hp[0], 7.9, hp[1]], yaw_of(inward), [0.32, 0.12, 0.62], glow(0xfff1d0));
                         self.lamps.extend_from_slice(&[hp[0], hp[1]]);
                     }
+                }
+                // Telecom / power cabinets on the pavement, facing the road.
+                let mut cab = Vec::new();
+                walk(85.0, 33.0, &mut |p, dir| cab.push((p, dir)));
+                for &(p, dir) in &cab {
+                    // One-way carriageways only have the right-hand pavement (the other side is the median).
+                    let sd = if oneway || rng.f() < 0.5 { -1.0 } else { 1.0 };
+                    let nrm = [dir[1] * sd, -dir[0] * sd];
+                    let q = [p[0] + nrm[0] * (half + 1.05), p[1] + nrm[1] * (half + 1.05)];
+                    if ctx.in_building(q, 0.7) || near_junction(q, half + 5.0) {
+                        continue;
+                    }
+                    let yaw = yaw_of([-nrm[0], -nrm[1]]);
+                    self.inst(M_POWERBOX, [q[0], 0.1, q[1]], yaw, [1.0, 1.0, 1.0]);
+                    self.obstacle(q, yaw, 0.48, 0.23, 1.1);
+                }
+                // Manhole covers along the carriageway.
+                let mut mh = Vec::new();
+                walk(52.0, 21.0, &mut |p, dir| mh.push((p, dir)));
+                for &(p, dir) in &mh {
+                    let lat = rng.range(-0.35, 0.35) * half;
+                    let q = [p[0] + dir[1] * lat, p[1] - dir[0] * lat];
+                    if near_junction(q, half + 3.0) {
+                        continue;
+                    }
+                    self.inst(M_MANHOLE, [q[0], 0.1, q[1]], rng.range(0.0, 6.28), [1.0, 0.15, 1.0]);
                 }
             } else if base == road::PEDESTRIAN {
                 let mut lamps = Vec::new();
@@ -718,6 +779,18 @@ impl Props {
                         }
                     }
                     if let Some(q) = ok {
+                        // A cabinet at the foot of some poles.
+                        if rng.f() < 0.18 {
+                            let inward = [p[0] - q[0], p[1] - q[1]];
+                            let il = (inward[0] * inward[0] + inward[1] * inward[1]).sqrt().max(1e-3);
+                            let inward = [inward[0] / il, inward[1] / il];
+                            let cq = [q[0] + dir[0] * 0.9 - inward[0] * 0.1, q[1] + dir[1] * 0.9 - inward[1] * 0.1];
+                            if !ctx.in_building(cq, 0.5) {
+                                let yaw = yaw_of(inward);
+                                self.inst(M_POWERBOX, [cq[0], 0.0, cq[1]], yaw, [0.8, 0.9, 0.8]);
+                                self.obstacle(cq, yaw, 0.38, 0.19, 1.0);
+                            }
+                        }
                         self.cyl([q[0], 0.0, q[1]], 0.15, 10.5, 7, rgb(0x8f8f8a));
                         let across = [dir[1], -dir[0]];
                         self.bx([q[0], 9.75, q[1]], yaw_of(across), [0.1, 0.12, 1.7], rgb(0x5b5b58));
@@ -738,6 +811,25 @@ impl Props {
                         let pa = [a[0] + aa[0] * lat, hgt, a[1] + aa[1] * lat];
                         let pb = [b[0] + aa[0] * lat, hgt, b[1] + aa[1] * lat];
                         self.wire(pa, pb, sag + span * 0.008, 8);
+                    }
+                }
+                // Cars under covers parked along villa alleys.
+                if alley && half > 2.2 {
+                    let mut spots = Vec::new();
+                    walk(29.0, 9.0, &mut |p, dir| spots.push((p, dir)));
+                    for &(p, dir) in &spots {
+                        if rng.f() > 0.2 {
+                            continue;
+                        }
+                        let sd = if rng.f() < 0.5 { 1.0 } else { -1.0 };
+                        let nrm = [dir[1] * sd, -dir[0] * sd];
+                        let q = [p[0] + nrm[0] * (half - 1.0), p[1] + nrm[1] * (half - 1.0)];
+                        if ctx.in_building(q, 1.1) || near_junction(q, half + 7.0) {
+                            continue;
+                        }
+                        let yaw = yaw_of(dir) + if rng.f() < 0.5 { std::f32::consts::PI } else { 0.0 };
+                        self.inst(M_COVEREDCAR, [q[0], 0.0, q[1]], yaw, [1.0, 1.0, 1.0]);
+                        self.obstacle(q, yaw, 0.86, 2.1, 1.4);
                     }
                 }
                 // Service drops to nearby buildings.
@@ -772,6 +864,11 @@ impl Props {
     /// Cells that contain props: flattened (cx, cz, count).
     pub fn cell_list(&self) -> Vec<i32> {
         let mut v: Vec<(i32, i32, usize)> = self.cells.iter().map(|(k, p)| (k.0, k.1, p.len())).collect();
+        for k in self.insts.keys() {
+            if !self.cells.contains_key(k) {
+                v.push((k.0, k.1, 0));
+            }
+        }
         v.sort();
         v.into_iter().flat_map(|(x, z, n)| [x, z, n as i32]).collect()
     }

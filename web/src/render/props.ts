@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 import type { Game } from '../wasm/kta_wasm.js';
+import { ModelLayer } from './models';
 
 const CELL = 128;
 
@@ -12,7 +13,8 @@ function disposeArray(this: THREE.BufferAttribute) {
 
 export class PropStreamer {
   private available = new Map<string, [number, number]>();
-  private loaded = new Map<string, { mesh: THREE.Mesh; bytes: number }>();
+  private loaded = new Map<string, { mesh: THREE.Mesh | null; bytes: number }>();
+  models: ModelLayer | null = null;
   private material: THREE.MeshStandardMaterial;
   private timer = 0;
   bytes = 0;
@@ -49,12 +51,16 @@ export class PropStreamer {
     }
     want.sort((a, b) => a[1] - b[1]);
     for (const [key] of want.slice(0, force ? want.length : 2)) this.load(key);
+    this.models?.flush();
     for (const [key, v] of this.loaded) {
       const [cx, cz] = this.available.get(key)!;
       const d = Math.hypot((cx + 0.5) * CELL - x, (cz + 0.5) * CELL - z) - CELL * 0.7;
       if (d > this.radius + 70) {
-        this.scene.remove(v.mesh);
-        v.mesh.geometry.dispose();
+        if (v.mesh) {
+          this.scene.remove(v.mesh);
+          v.mesh.geometry.dispose();
+        }
+        this.models?.remove('cell:' + key);
         this.bytes -= v.bytes;
         this.loaded.delete(key);
       }
@@ -63,7 +69,12 @@ export class PropStreamer {
 
   private load(key: string) {
     const [cx, cz] = this.available.get(key)!;
+    this.models?.set('cell:' + key, ModelLayer.fromFlat(this.game.prop_cell_instances(cx, cz)));
     const d = this.game.build_prop_cell(cx, cz);
+    if (d[1] === 0) {
+      this.loaded.set(key, { mesh: null, bytes: 0 });
+      return;
+    }
     const buf = this.memory.buffer;
     const pos = new Float32Array(buf, d[0], d[1]).slice();
     const nrm = new Int8Array(buf, d[2], d[3]).slice();

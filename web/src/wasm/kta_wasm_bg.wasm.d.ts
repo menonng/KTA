@@ -18,6 +18,7 @@ export const game_minimap_buildings: (a: number) => [number, number];
 export const game_minimap_roads: (a: number) => [number, number];
 export const game_new: (a: number, b: number, c: number, d: number) => [number, number, number];
 export const game_player_ptr: (a: number) => number;
+export const game_prop_cell_instances: (a: number, b: number, c: number) => [number, number];
 export const game_prop_cells: (a: number) => [number, number];
 export const game_prop_count: (a: number) => number;
 export const game_roads_desc: (a: number) => [number, number];

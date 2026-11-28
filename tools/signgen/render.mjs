@@ -585,8 +585,57 @@ function paintBands7(d, ctx, g, W, H) {
   drawMark(ctx, d.mark, W / 2, H / 2, H * 0.42);
 }
 
+// GS25-type fascia: corner brackets in the accent colour at both ends, the
+// wordmark in the middle, slogan inside the left bracket.
+function paintGG(d, ctx, g, W, H) {
+  fillBg(ctx, d.bg, W, H);
+  const acc = d.main.parts[1].color;
+  const t = H * 0.075;
+  const L = Math.min(W * 0.26, H * 3.2);
+  const y0 = H * 0.24;
+  const y1 = H * 0.74;
+  ctx.fillStyle = acc;
+  ctx.fillRect(W * 0.06, y0, L, t);
+  ctx.fillRect(W * 0.06, y0, t, y1 - y0);
+  ctx.fillRect(W * 0.94 - L, y0, L, t);
+  ctx.fillRect(W * 0.94 - t, y0, t, y1 - y0);
+  const fs = fit('600 Montserrat|latin', 'Lifestyle Platform', L * 0.8, H * 0.13);
+  drawText(ctx, '600 Montserrat|latin', 'Lifestyle Platform', fs, W * 0.06 + t * 2.5 + fs.w / 2, H * 0.52, { color: '#FFFFFF' });
+  const fn = fit('700 Noto Sans KR|ko', '홍대점', L * 0.5, H * 0.11);
+  drawText(ctx, '700 Noto Sans KR|ko', '홍대점', fn, W * 0.94 - t * 2.5 - fn.w / 2, H * 0.6, { color: '#C9CDD2' });
+  const m = d.main;
+  const f = fit(m.font, m.text, W - 2 * (W * 0.06 + L) - H * 0.6, H * 0.5);
+  drawText(ctx, m.font, m.text, f, W / 2, H * 0.5, { parts: m.parts, color: m.color });
+  drawText(g, m.font, m.text, f, W / 2, H * 0.5, { color: '#ffffff' });
+  g.fillStyle = '#ffffff';
+  g.fillRect(W * 0.06, y0, L, t);
+  g.fillRect(W * 0.06, y0, t, y1 - y0);
+  g.fillRect(W * 0.94 - L, y0, L, t);
+  g.fillRect(W * 0.94 - t, y0, t, y1 - y0);
+}
+
+// CU-type fascia: small 'Nice to', the wordmark, then a long rounded bar.
+function paintCU(d, ctx, g, W, H) {
+  fillBg(ctx, d.bg, W, H);
+  const m = d.main;
+  const fn = fit('600 Montserrat|latin', 'Nice to', H * 1.6, H * 0.16);
+  let x = H * 0.45;
+  drawText(ctx, '600 Montserrat|latin', 'Nice to', fn, x + fn.w / 2, H * 0.52, { color: '#FFFFFF' });
+  x += fn.w + H * 0.12;
+  const f = fit(m.font, m.text, W * 0.3, H * 0.44);
+  drawText(ctx, m.font, m.text, f, x + f.w / 2, H * 0.5, { color: '#FFFFFF' });
+  x += f.w + H * 0.25;
+  const bh = H * 0.26;
+  ctx.fillStyle = '#B3D335';
+  ctx.beginPath();
+  ctx.roundRect(x, H * 0.5 - bh / 2, Math.max(H, W - x - H * 0.45), bh, bh / 2);
+  ctx.fill();
+}
+
 function paintH(d, ctx, g, W, H) {
   if (d.layout === 'bands7') return paintBands7(d, ctx, g, W, H);
+  if (d.layout === 'gg') return paintGG(d, ctx, g, W, H);
+  if (d.layout === 'cu') return paintCU(d, ctx, g, W, H);
   const m = d.main;
   const layout = d.layout || 'center';
   fillBg(ctx, d.bg, W, H);
@@ -1159,7 +1208,7 @@ function sizeOf(d) {
   const D = DENSITY[d.kind] * (d._scale || 1) * (d.dens || 1);
   const H = Math.max(8, Math.round(d.h * D));
   const full = Math.max(8, Math.round(d.w * D));
-  if (FULL.has(d.style)) return { W: full, H, D };
+  if (FULL.has(d.style) || d.full) return { W: full, H, D };
   const nat = Math.ceil(measureH(d, H));
   return { W: Math.max(Math.round(H * 1.2), Math.min(full, nat)), H, D };
 }
@@ -1262,6 +1311,8 @@ async function loadFonts(designs) {
     d.tenants?.forEach((t) => { add(t.font, t.text); add('900 Noto Sans KR', t.floor); emo(t.glyph); });
     d.items?.forEach((it) => add(it.font, it.n + it.p));
     if (d.led) add('800 Montserrat|latin', d.led.text);
+    if (d.layout === 'gg') { add('600 Montserrat|latin', 'Lifestyle Platform'); add('700 Noto Sans KR|ko', '홍대점'); }
+    if (d.layout === 'cu') add('600 Montserrat|latin', 'Nice to');
     if (d.band) { add('900 Noto Sans KR', d.band.name); add('700 Noto Sans KR', d.band.goods); emo(d.band.glyph); addMark(d.band.mark); }
     if (d.floorTag) add('900 Noto Sans KR', d.floorTag.text);
     addMark(d.mark);

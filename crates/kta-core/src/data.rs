@@ -49,7 +49,8 @@ pub struct Sign {
     pub label: u16,
     pub vertical: bool,
     /// Mounting: 0 wall sign, 1 window decal, 2 awning, 3 standing sign
-    /// (light box on the pavement), 4 round projecting disc, 5 rooftop cross.
+    /// (light box on the pavement), 4 round projecting disc, 5 rooftop cross,
+    /// 6 roller shutter of an empty unit (model, no artwork).
     /// Stored in the
     /// flags byte (bits 1-3) next to `vertical` (bit 0).
     pub mount: u8,

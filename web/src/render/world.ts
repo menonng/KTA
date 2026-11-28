@@ -168,6 +168,30 @@ if (fRoof > 0.5) {
       fEmis = (inside * level * vec3(0.86, 0.92, 0.9) * (1.0 - fres) + skyRefl * fres) * glass;
     }
     if (fV > 2.76) fCol = gcol * 0.85;
+  } else if (fV >= floorH && (fKind == 2.0 || fKind == 0.0) && fH > 9.5 && kH1(fSeed * 11.3) < 0.36) {
+    // Glass curtain wall on upper floors (2000s-2010s commercial blocks around
+    // Hongdae): tinted panels in an aluminium grid, opaque spandrel band at
+    // each slab, office floors lit as a whole at night.
+    float pw = 1.2 + kH1(fSeed * 12.7) * 0.45;
+    vec2 cg = vec2(fU / pw, (fV - floorH) / floorH);
+    vec2 cgw = fwidth(cg);
+    float frm = clamp(kPulse(cg.x, 0.0, 0.035, cgw.x) + kPulse(cg.y, 0.0, 0.03, cgw.y) + kPulse(cg.y, 0.24, 0.265, cgw.y), 0.0, 1.0) * (1.0 - farF * 0.7);
+    float span = kPulse(cg.y, 0.03, 0.24, cgw.y) * (1.0 - frm);
+    float glassC = (1.0 - frm) * (1.0 - span);
+    vec3 tintG = mix(vec3(0.30, 0.42, 0.48), vec3(0.36, 0.44, 0.38), step(0.6, kH1(fSeed * 13.1)));
+    vec2 cell = vec2(fract(cg.x), clamp((fract(cg.y) - 0.265) / 0.735, 0.0, 1.0));
+    float back;
+    vec3 room = vec3(0.5);
+    if (farF < 0.999) room = kRoom(cell, rT, vec3(pw, floorH * 0.73, 7.0), floor(cg.x) * 1.3 + floor(cg.y) * 7.1 + fSeed, 0.0, back);
+    float lit = step(0.5, kH2(vec2(floor(cg.y), fSeed)));
+    vec3 inside = mix(room, vec3(0.5), farF) * mix(vec3(1.0), vec3(0.88, 0.94, 1.0), uNight);
+    float level = mix(0.035, 0.8 * lit + 0.02, uNight);
+    float fr3 = max(fres, 0.32);
+    fCol = mix(vec3(0.02), vec3(0.36, 0.37, 0.39), frm);
+    fCol = mix(fCol, tintG * 0.12, span);
+    fRough = mix(0.06, 0.4, frm);
+    fNt = vec3(0.0, 0.0, 1.0);
+    fEmis = (inside * level * tintG * (1.0 - fr3) + skyRefl * tintG * fr3 * 1.6) * glassC + skyRefl * tintG * fr3 * 1.2 * span;
   } else if (fV >= floorH) {
     float winW = 0.40 + kH1(fSeed * 4.3) * 0.32;
     float winH = 0.42 + kH1(fSeed * 5.9) * 0.2;
@@ -322,7 +346,7 @@ export function createBuildingMaterial(night: { value: number }, tex: TextureSet
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FACADE_NORMAL}`)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += fEmis;');
   };
-  m.customProgramCacheKey = () => 'kta-facade-tex-4';
+  m.customProgramCacheKey = () => 'kta-facade-tex-5';
   return m;
 }
 

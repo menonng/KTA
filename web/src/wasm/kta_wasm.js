@@ -168,6 +168,18 @@ export class Game {
         return ret >>> 0;
     }
     /**
+     * Model instances of one prop cell: model, x, y, z, yaw, sx, sy, sz per instance.
+     * @param {number} cx
+     * @param {number} cz
+     * @returns {Float32Array}
+     */
+    prop_cell_instances(cx, cz) {
+        const ret = wasm.game_prop_cell_instances(this.__wbg_ptr, cx, cz);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * Prop cells: flattened (cx, cz, primitive count). Cell size is 128 m.
      * @returns {Int32Array}
      */

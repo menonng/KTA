@@ -17,6 +17,12 @@ pub struct SegGrid {
 
 impl SegGrid {
     pub fn new(m: &MapData, cell: f32) -> SegGrid {
+        SegGrid::with_obstacles(m, cell, &[])
+    }
+
+    /// Walls plus extra solid footprints (corner quads with a height), e.g.
+    /// parked cars and street cabinets from the prop generator.
+    pub fn with_obstacles(m: &MapData, cell: f32, obstacles: &[([P2; 4], f32)]) -> SegGrid {
         let mut segs = Vec::new();
         let mut heights = Vec::new();
         let mut mn = [f32::MAX, f32::MAX];
@@ -49,6 +55,12 @@ impl SegGrid {
             for i in 0..4 {
                 segs.push([q[i], q[(i + 1) % 4]]);
                 heights.push(1.2);
+            }
+        }
+        for (q, hgt) in obstacles {
+            for i in 0..4 {
+                segs.push([q[i], q[(i + 1) % 4]]);
+                heights.push(*hgt);
             }
         }
         if segs.is_empty() {

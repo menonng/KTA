@@ -154,6 +154,8 @@ function signMaterial(night: { value: number }, atlasSize: number) {
 }
 
 export function buildSigns(atlas: SignAtlas, input: SignInst[], night: { value: number }) {
+  // Mount 6 (roller shutters) are models, not artwork.
+  input = input.filter((s) => s.mount !== 6);
   // Vertical signs are boxes seen from both sides: a face on each side.
   type Face = SignInst & { meta: SignMeta; pitch?: number; rect?: [number, number, number, number] };
   const faces: Face[] = [];

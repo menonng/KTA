@@ -143,6 +143,11 @@ impl Game {
         vec![ptr(&m.pos), m.pos.len() as u32, ptr(&m.nrm), m.nrm.len() as u32, ptr(&m.col), m.col.len() as u32, ptr(&m.idx), m.idx.len() as u32]
     }
 
+    /// Model instances of one prop cell: model, x, y, z, yaw, sx, sy, sz per instance.
+    pub fn prop_cell_instances(&self, cx: i32, cz: i32) -> Vec<f32> {
+        self.w.props.cell_instances(cx, cz)
+    }
+
     /// Wire line segments: x0, y0, z0, x1, y1, z1, ...
     pub fn wires(&self) -> Vec<f32> {
         self.w.props.wires.clone()

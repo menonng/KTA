@@ -1,0 +1,13 @@
+{
+  "name": "kta-asset-pipeline",
+  "private": true,
+  "type": "module",
+  "description": "Build-time asset tools (CC0 textures and models -> KTX2 / GLB). Not shipped.",
+  "dependencies": {
+    "@gltf-transform/core": "4.5.1",
+    "@gltf-transform/extensions": "4.5.1",
+    "@gltf-transform/functions": "4.5.1",
+    "ktx2-encoder": "0.6.0",
+    "meshoptimizer": "1.3.0"
+  }
+}

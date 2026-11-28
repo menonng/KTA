@@ -729,8 +729,11 @@ function worldDesign(r, d, nm, icon, upper) {
 //   parts: wordmark pieces with their own colours; mark: logo symbol;
 //   stripes: accent bands at the bottom of the fascia; frame: cladding colour.
 const BRAND_STYLE = {
-  GG24: { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['GG24', '#1C5DB8']], font: 'Archivo Black', dot: '#3EC1E8', sub: ['LIFESTYLE PLATFORM', '#5A6470', '600 Montserrat'], stripes: [{ c: '#6B4A2B', t: 0.045 }, { c: '#1C5DB8', t: 0.09 }], frame: '#F4F5F6' },
-  CUZ: { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['C', '#652F8D'], ['U', '#A6CE39'], ['Z', '#652F8D']], font: 'Archivo Black', stripes: [{ c: '#A6CE39', t: 0.05 }, { c: '#652F8D', t: 0.09 }], frame: '#F2F2F2' },
+  // Current shop fronts (Commons photos, 2022): charcoal fascia, white GS + sky-blue 25,
+  // sky-blue corner brackets with 'Lifestyle Platform'; bronze canopy under it.
+  GG24: { bg: { type: 'panel', c1: '#2B2D31' }, parts: [['GG', '#FFFFFF'], ['24', '#3AB7EA']], font: 'Archivo Black', layout: 'gg', full: true, frame: '#2B2D31' },
+  // Current CU fronts: purple fascia, 'Nice to CU' in white and a long lime bar; dark canopy.
+  CUZ: { bg: { type: 'panel', c1: '#5F2B8A' }, parts: [['CUZ', '#FFFFFF']], font: 'Archivo Black', layout: 'cu', full: true, frame: '#3A3A3E' },
   // The real store's fascia: orange / green / red bands running the full width,
   // the logo in a white box in the middle.
   식스텐: { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['SIX-TEN', '#008C45']], font: 'Archivo Black', layout: 'bands7', bands: ['#F58220', '#008C45', '#E4002B'], mark: { type: 'six', fg: '#F58220', fg2: '#E4002B', text: 'SIX-TEN', ink: '#008C45' }, frame: '#F4F5F6' },
@@ -784,6 +787,7 @@ function brandDesign(req, r, d) {
   d.dot = sp.dot || null;
   d.stripes = sp.stripes || null;
   d.layout = sp.layout || (d.sub.length ? 'below' : 'center');
+  d.full = !!sp.full;
   d.bands = sp.bands || null;
   d.box = { color: d.bg.type === 'brushed' ? '#1E2124' : shade(d.bg.c1, 0.85), depth: 0.2, frame: sp.frame || null };
   d.glow = sp.glow || 'face';
@@ -957,7 +961,13 @@ const AWNING = {
   retail: [['#111111', '#111111'], ['#1F2A44', '#1F2A44'], ['#D8CBB4', '#D8CBB4'], ['#3A3F44', '#F4F1E8']],
 };
 
+const BRAND_AWNING = { GG24: '#6E523C', CUZ: '#38383C' };
 function awningDesign(req, r, d) {
+  if (req.c === 'brand') {
+    const col = BRAND_AWNING[req.t] || '#3A3A3E';
+    Object.assign(d, { style: 'awning', text: `${req.t} canopy`, stripes2: null, c1: col, edge: 'straight', trim: null, box: { color: shade(col, 0.75), depth: 0.02, awning: true }, glow: 'none' });
+    return d;
+  }
   const g = AWNING[req.c] ? req.c : 'cafe';
   d.style = 'awning';
   const [a, b] = r.pick(AWNING[g]);
