@@ -127,12 +127,43 @@ async function boot() {
     props.update(sp[0], sp[2], 0, true);
   }
   input.enabled = !BENCH;
-  // Compile both light setups (fill light on/off) before the first frame so
-  // dusk and dawn never hitch on shader compilation.
-  fill.visible = true;
-  post.compile(scene, camera);
-  fill.visible = false;
-  post.compile(scene, camera);
+  // Compile both light setups (fill light on/off) for every object, including
+  // the ones hidden right now (night spill, headlight beams, people layers with
+  // no one in view), so dusk, dawn and new arrivals never hitch on shader
+  // compilation. Run again once the streamed assets (signs, models) are in.
+  let frameCount = 0;
+  let onFrames: () => void = () => {};
+  const framesDrawn = new Promise<void>((r) => (onFrames = r));
+  const warmRT = new THREE.WebGLRenderTarget(16, 16, { type: THREE.HalfFloatType });
+  const precompile = async () => {
+    // Everything visible only inside this synchronous block (no frame can be drawn in between);
+    // compileAsync starts the programs here and only waits for the driver afterwards.
+    const hidden: THREE.Object3D[] = [];
+    scene.traverse((o) => {
+      if (!o.visible) {
+        hidden.push(o);
+        o.visible = true;
+      }
+    });
+    const fillWas = fill.visible;
+    const jobs: Promise<unknown>[] = [];
+    for (const on of [true, false]) {
+      fill.visible = on;
+      jobs.push(post.compileAsync(scene, camera));
+    }
+    // One draw into a tiny off-screen target also builds the shadow-map depth programs,
+    // which compile() does not cover.
+    renderer.setRenderTarget(warmRT);
+    for (const on of [true, false]) {
+      fill.visible = on;
+      renderer.shadowMap.needsUpdate = true;
+      renderer.render(scene, camera);
+    }
+    renderer.setRenderTarget(null);
+    fill.visible = fillWas;
+    for (const o of hidden) o.visible = false;
+    await Promise.all(jobs);
+  };
 
   let hours = Number(params.get('time') ?? 18.6);
   let dayIndex = 2;
@@ -222,7 +253,11 @@ async function boot() {
       return sg ? { x: sg.x, z: sg.z, yaw: sg.yaw, vertical: sg.vertical } : null;
     },
     bench: null as unknown,
-    signsReady: Promise.all([signsReady, modelsReady]),
+    // After two drawn frames (the environment map and every streamed asset exist), compile the
+    // night variants too, so the first dusk does not stall.
+    signsReady: Promise.all([signsReady, modelsReady])
+      .then(() => framesDrawn)
+      .then(() => precompile()),
     modelSpots: (m: number) => models.list(m).map((it) => ({ x: it.x, z: it.z, yaw: it.yaw })),
     carShow: (x: number, z: number, yaw: number, gap = 3.2) => {
       showCars.length = 0;
@@ -233,6 +268,8 @@ async function boot() {
         showCars.push({ t, x: x + Math.sin(yaw) * off, z: z + Math.cos(yaw) * off, yaw, color: colors[t] });
       }
     },
+    precompile: () => precompile(),
+    programs: () => (renderer.info.programs ?? []).map((p) => `${p.name}|${p.cacheKey}`),
     nearestPeds: (n = 5) => {
       const out: { x: number; z: number; yaw: number; d: number }[] = [];
       for (let i = 0; i < cv.length; i += 4) out.push({ x: cv[i], z: cv[i + 1], yaw: cv[i + 2], d: Math.hypot(cv[i] - pv[0], cv[i + 1] - pv[2]) });
@@ -350,6 +387,7 @@ async function boot() {
     post.atmo.fogScale = 1 - 0.7 * env.night.value;
     precip.update(dt, camera.position, env.night.value);
     post.render(scene, camera, env.grade);
+    if (++frameCount === 3) onFrames();
 
     if (now - lastHud > 100) {
       lastHud = now;

@@ -440,6 +440,14 @@ export class Post {
     this.renderer.setRenderTarget(null);
   }
 
+  /** Like compile, but lets the driver compile in parallel (KHR_parallel_shader_compile) without blocking. */
+  compileAsync(scene: THREE.Scene, camera: THREE.Camera): Promise<unknown> {
+    this.renderer.setRenderTarget(this.scene);
+    const p = this.renderer.compileAsync(scene, camera);
+    this.renderer.setRenderTarget(null);
+    return p;
+  }
+
   render(scene: THREE.Scene, camera: THREE.Camera, g: Grade) {
     const r = this.renderer;
     r.setRenderTarget(this.scene);

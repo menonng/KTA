@@ -25,6 +25,81 @@ float kPulse(float x, float a, float b, float w) {
 }
 `;
 
+
+const GROUND_LIB = /* glsl */ `
+// Stochastic (hex) tiling: three lookups with random offset and rotation, blended on a triangle
+// grid with variance-preserving weights, so a photo texture never shows its repeat.
+vec2 kH22(vec2 p) { vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.103, 0.0973)); q += dot(q, q.yzx + 33.33); return fract((q.xx + q.yz) * q.zy); }
+void kHex(float layer, vec2 uv, float rotAmt, out vec3 col, out vec3 nrm) {
+  vec2 st = uv * 0.6 * 3.4641016;
+  vec2 sk = vec2(st.x, -0.57735027 * st.x + 1.15470054 * st.y);
+  vec2 b = floor(sk);
+  vec3 t = vec3(fract(sk), 0.0);
+  t.z = 1.0 - t.x - t.y;
+  float s = step(0.0, -t.z);
+  float s2 = 2.0 * s - 1.0;
+  vec3 w = vec3(-t.z * s2, s - t.y * s2, s - t.x * s2);
+  vec2 v[3];
+  v[0] = b + vec2(s, s);
+  v[1] = b + vec2(s, 1.0 - s);
+  v[2] = b + vec2(1.0 - s, s);
+  w = pow(max(w, 0.0), vec3(4.0));
+  w /= (w.x + w.y + w.z);
+  vec2 dx = dFdx(uv), dy = dFdy(uv);
+  vec3 mean = textureLod(tGroundA, vec3(0.5, 0.5, layer), 12.0).rgb;
+  vec3 c = vec3(0.0), n = vec3(0.0);
+  for (int i = 0; i < 3; i++) {
+    vec2 h = kH22(v[i]);
+    float a = (h.x * 2.0 - 1.0) * 3.14159 * rotAmt;
+    float ca = cos(a), sa = sin(a);
+    mat2 R = mat2(ca, sa, -sa, ca);
+    vec2 u2 = R * uv + h * 17.0;
+    vec3 ci = textureGrad(tGroundA, vec3(u2, layer), R * dx, R * dy).rgb;
+    vec3 ni = textureGrad(tGroundN, vec3(u2, layer), R * dx, R * dy).xyz * 2.0 - 1.0;
+    ni.xy = vec2(ca * ni.x + sa * ni.y, -sa * ni.x + ca * ni.y); // back into the unrotated frame
+    c += w[i] * ci;
+    n += w[i] * ni;
+  }
+  col = max(mean + (c - mean) / sqrt(dot(w, w)), 0.0);
+  nrm = vec3(n.xy / sqrt(dot(w, w)), max(n.z, 0.2));
+}
+// Sparse cracks: the photo's dark cracks are lifted to the surrounding tone except inside a few
+// regions (keep = 1), so each crack network is a one-off.
+void kCracks(inout vec3 col, inout vec3 nrm, vec3 mean, float keep) {
+  float l = dot(col, vec3(0.299, 0.587, 0.114));
+  float lm = dot(mean, vec3(0.299, 0.587, 0.114));
+  float dark = smoothstep(0.82, 0.55, l / max(lm, 1e-3));
+  float k = dark * (1.0 - keep);
+  col = mix(col, mean * (0.92 + 0.16 * (l / max(lm, 1e-3))), k);
+  nrm = normalize(mix(nrm, vec3(0.0, 0.0, 1.0), k));
+}
+// Fan-shaped ginkgo leaves and chewing-gum spots on pavements (world xz, density 0..1).
+vec4 kLitter(vec2 p, float leafDensity) {
+  vec4 o = vec4(0.0);
+  vec2 cell = floor(p / 0.11);
+  vec2 f = fract(p / 0.11) - 0.5;
+  float h = kH2(cell + 7.7);
+  if (h < leafDensity) {
+    float a = kH2(cell + 3.1) * 6.2832;
+    vec2 q = mat2(cos(a), sin(a), -sin(a), cos(a)) * (f + (kH22(cell) - 0.5) * 0.4);
+    float r = length(q);
+    float ang = atan(q.x, q.y);
+    float fan = step(abs(ang), 1.0) * smoothstep(0.34, 0.3, r) * step(0.04, r);
+    float notch = smoothstep(0.03, 0.0, abs(ang)) * step(0.18, r);
+    float leaf = fan * (1.0 - notch);
+    vec3 lc = mix(vec3(0.86, 0.66, 0.12), vec3(0.62, 0.45, 0.12), kH2(cell + 9.3));
+    o = vec4(lc, leaf);
+  }
+  vec2 gc = floor(p / 0.35);
+  if (kH2(gc + 1.3) < 0.035) {
+    float r = length(fract(p / 0.35) - 0.5 - (kH22(gc + 2.0) - 0.5) * 0.5);
+    float g = smoothstep(0.07, 0.05, r);
+    if (g > o.a) o = vec4(vec3(0.16, 0.15, 0.14), g * 0.7);
+  }
+  return o;
+}
+`;
+
 // Interior mapping: ray-cast into a box room behind each window (GTA V style).
 // p in room meters (x across, y up, z=0 at glass), r ray in facade space (z into room).
 const INTERIOR = /* glsl */ `
@@ -281,10 +356,46 @@ vec2 guv = vec2(rA, rX) / 4.0;
 if (rK > 8.5) { gl = 1.0; guv = vec2(rA, rX) / 2.0; }
 else if (rK > 5.5 && rK < 6.5) { gl = 2.0; guv = vec2(rA, rX) / 2.0; }
 else if (rK > 6.5 && rK < 7.5) { gl = 1.0; guv = vec2(rA, rX) / 2.0; }
-vec3 rc = texture(tGroundA, vec3(guv, gl)).rgb;
-vec3 gNt = texture(tGroundN, vec3(guv, gl)).xyz * 2.0 - 1.0;
-if (gl < 0.5) rc *= 0.95 * (0.82 + 0.25 * kN(vec2(rA, rX) * 0.06 + 13.0));
-else rc *= 0.85;
+vec3 rc;
+vec3 gNt;
+vec2 rp = vec2(rA, rX);
+if (gl < 0.5) {
+  // Asphalt: stochastic tiling, cracks kept only in a few places, broad tonal variation.
+  kHex(0.0, guv, 1.0, rc, gNt);
+  vec3 mean = textureLod(tGroundA, vec3(0.5, 0.5, 0.0), 12.0).rgb;
+  float keep = smoothstep(0.66, 0.74, kN(rp * 0.045 + 31.0));
+  kCracks(rc, gNt, mean, keep);
+  rc *= vec3(1.04, 1.0, 0.93) * 0.95 * (0.84 + 0.22 * kN(rp * 0.05 + 13.0)) * (0.94 + 0.12 * kN(rp * 0.31 + 5.0));
+  // Wheel paths (polished, slightly lighter) and an oily band between them, per 3.25 m lane.
+  float lanePos = fract((rOne < 0.5 ? abs(rX) : rX + rHw) / 3.25);
+  float track = exp(-pow((lanePos - 0.27) / 0.07, 2.0)) + exp(-pow((lanePos - 0.73) / 0.07, 2.0));
+  float oil = exp(-pow((lanePos - 0.5) / 0.09, 2.0)) * smoothstep(0.45, 0.8, kN(vec2(rA * 0.35, rX * 2.0) + 3.0));
+  rc *= (1.0 + 0.06 * track) * (1.0 - 0.22 * oil);
+  // Utility-cut repairs: darker, smoother rectangles with a sealed seam.
+  vec2 pc = floor(vec2(rA / 13.0, rX / 3.25));
+  float ph = kH2(pc + 41.0);
+  if (ph < 0.14) {
+    vec2 pf = vec2(fract(rA / 13.0) * 13.0, fract(rX / 3.25) * 3.25);
+    vec2 lo = vec2(1.0 + 5.0 * kH2(pc + 2.0), 0.3 + 0.8 * kH2(pc + 3.0));
+    vec2 hi = lo + vec2(2.0 + 5.0 * kH2(pc + 4.0), 0.8 + 1.4 * kH2(pc + 5.0));
+    vec2 dq = min(pf - lo, hi - pf);
+    float inside = step(0.0, min(dq.x, dq.y));
+    float seam = inside * smoothstep(0.05, 0.0, min(dq.x, dq.y));
+    rc = mix(rc, rc * vec3(0.7, 0.72, 0.76), inside * 0.9);
+    rc *= 1.0 - 0.45 * seam;
+    gNt = normalize(mix(gNt, vec3(0.0, 0.0, 1.0), inside * 0.5));
+  }
+} else {
+  rc = texture(tGroundA, vec3(guv, gl)).rgb * 0.85;
+  gNt = texture(tGroundN, vec3(guv, gl)).xyz * 2.0 - 1.0;
+  // Pavements: weathering, grime along the kerb, litter.
+  rc *= (0.86 + 0.2 * kN(rp * 0.07 + 2.0)) * (0.93 + 0.12 * kN(rp * 0.6 + 8.0));
+  float kerbD = max(rHw - abs(rX), 0.0);
+  rc *= mix(0.8, 1.0, smoothstep(0.0, 0.6, kerbD));
+  vec4 lit = kLitter(vGP.xz, 0.11 * smoothstep(0.35, 0.75, kN(vGP.xz * 0.08 + 4.0)) + 0.012);
+  rc = mix(rc, lit.rgb, lit.a);
+  gNt = normalize(mix(gNt, vec3(0.0, 0.0, 1.0), lit.a));
+}
 if (rK < 3.5 || rK > 7.5) {
   float ax = abs(rX);
   float edge = rHw - ax;
@@ -393,7 +504,7 @@ function groundShader(tex: TextureSet, body: string, extraVert: string) {
       .replace('#include <common>', `#include <common>\nvarying vec3 vGP;\nvarying vec3 vGN;\n${extraVert}`)
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGP = (modelMatrix * vec4(position, 1.0)).xyz;\nvGN = vec3(0.0, 1.0, 0.0);');
     s.fragmentShader = s.fragmentShader
-      .replace('#include <common>', `#include <common>\nprecision highp sampler2DArray;\nuniform sampler2DArray tGroundA;\nuniform sampler2DArray tGroundN;\nuniform float uWet;\nuniform float uSnow;\nvarying vec3 vGP;\nvarying vec3 vGN;\n${HASH}`)
+      .replace('#include <common>', `#include <common>\nprecision highp sampler2DArray;\nuniform sampler2DArray tGroundA;\nuniform sampler2DArray tGroundN;\nuniform float uWet;\nuniform float uSnow;\nvarying vec3 vGP;\nvarying vec3 vGN;\n${HASH}\n${GROUND_LIB}`)
       .replace('#include <color_fragment>', `#include <color_fragment>\nfloat snowMask = 1.0;\n${body}\n${SURFACE_WEATHER}`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, mix(0.3, 0.03, puddle), uWet);\nroughnessFactor = mix(roughnessFactor, 0.6, snowC);')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\ngNt = mix(gNt, vec3(0.0, 0.0, 1.0), max(puddle, snowC));\n${GROUND_NORMAL}`);
@@ -408,7 +519,7 @@ export function createRoadMaterial(tex: TextureSet) {
     s.vertexShader = s.vertexShader.replace('vGN = vec3(0.0, 1.0, 0.0);', 'vGN = vec3(0.0, 1.0, 0.0);\nvRoad = aRoad;');
     s.fragmentShader = s.fragmentShader.replace('varying vec3 vGN;', 'varying vec3 vGN;\nvarying vec4 vRoad;');
   };
-  m.customProgramCacheKey = () => 'kta-road-tex-3';
+  m.customProgramCacheKey = () => 'kta-road-tex-4';
   return m;
 }
 
@@ -418,10 +529,15 @@ export function createGroundMaterial(tex: TextureSet) {
     tex,
     `vec2 guv = vGP.xz / 2.0;
      vec3 gNt = texture(tGroundN, vec3(guv, 1.0)).xyz * 2.0 - 1.0;
-     diffuseColor.rgb = texture(tGroundA, vec3(guv, 1.0)).rgb * 0.85 * (0.88 + 0.2 * kN(vGP.xz * 0.08));`,
+     vec3 gc = texture(tGroundA, vec3(guv, 1.0)).rgb * 0.85;
+     gc *= (0.86 + 0.2 * kN(vGP.xz * 0.07 + 2.0)) * (0.93 + 0.12 * kN(vGP.xz * 0.6 + 8.0));
+     vec4 lit = kLitter(vGP.xz, 0.11 * smoothstep(0.35, 0.75, kN(vGP.xz * 0.08 + 4.0)) + 0.012);
+     gc = mix(gc, lit.rgb, lit.a);
+     gNt = normalize(mix(gNt, vec3(0.0, 0.0, 1.0), lit.a));
+     diffuseColor.rgb = gc;`,
     '',
   );
-  m.customProgramCacheKey = () => 'kta-ground-tex-3';
+  m.customProgramCacheKey = () => 'kta-ground-tex-4';
   return m;
 }
 
