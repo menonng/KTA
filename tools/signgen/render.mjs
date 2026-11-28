@@ -499,6 +499,20 @@ function drawMark(ctx, mk, cx, cy, R, force) {
       ctx.fillStyle = mk.acc;
       ctx.fill();
       break;
+    case 'arches': {
+      // Double arch 'M' in the accent colour.
+      ctx.strokeStyle = c(mk.fg);
+      ctx.lineWidth = R * 0.34;
+      ctx.lineCap = 'butt';
+      for (const sx of [-1, 1]) {
+        ctx.beginPath();
+        const cx2 = cx + sx * R * 0.42;
+        ctx.moveTo(cx2 - R * 0.42, cy + R * 0.92);
+        ctx.bezierCurveTo(cx2 - R * 0.42, cy - R * 1.25, cx2 + R * 0.42, cy - R * 1.25, cx2 + R * 0.42, cy + R * 0.92);
+        ctx.stroke();
+      }
+      break;
+    }
     case 'cross':
       ctx.fillStyle = c(mk.fg);
       ctx.fillRect(cx - R * 0.13, cy - R * 0.95, R * 0.26, R * 1.9);
@@ -618,9 +632,10 @@ function paintGG(d, ctx, g, W, H) {
 function paintCU(d, ctx, g, W, H) {
   fillBg(ctx, d.bg, W, H);
   const m = d.main;
-  const fn = fit('600 Montserrat|latin', 'Nice to', H * 1.6, H * 0.16);
+  // '(Be)CUZ' — the name read as 'because'.
+  const fn = fit('600 Montserrat|latin', '(Be)', H * 1.6, H * 0.2);
   let x = H * 0.45;
-  drawText(ctx, '600 Montserrat|latin', 'Nice to', fn, x + fn.w / 2, H * 0.52, { color: '#FFFFFF' });
+  drawText(ctx, '600 Montserrat|latin', '(Be)', fn, x + fn.w / 2, H * 0.53, { color: '#FFFFFF' });
   x += fn.w + H * 0.12;
   const f = fit(m.font, m.text, W * 0.3, H * 0.44);
   drawText(ctx, m.font, m.text, f, x + f.w / 2, H * 0.5, { color: '#FFFFFF' });
@@ -632,8 +647,65 @@ function paintCU(d, ctx, g, W, H) {
   ctx.fill();
 }
 
+// Bun logo between two orange halves (burger chain parody).
+function paintBK(d, ctx, g, W, H) {
+  fillBg(ctx, d.bg, W, H);
+  const m = d.main;
+  const f = fit(m.font, m.text, Math.min(W * 0.62, H * 5.2), H * 0.3);
+  const lw = f.w + H * 0.5;
+  ctx.fillStyle = '#F5A623';
+  ctx.beginPath();
+  ctx.ellipse(W / 2, H * 0.36, lw / 2, H * 0.24, 0, Math.PI, 0);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(W / 2, H * 0.64, lw / 2, H * 0.16, 0, 0, Math.PI);
+  ctx.fill();
+  ctx.fillStyle = '#F5EBDC';
+  ctx.fillRect(W / 2 - lw / 2, H * 0.36, lw, H * 0.28);
+  drawText(ctx, m.font, m.text, f, W / 2, H * 0.5, { color: m.color });
+  g.fillStyle = '#ffffff';
+  g.fillRect(W / 2 - lw / 2, H * 0.12, lw, H * 0.68);
+}
+
+// Bucket stripes at the left end, wordmark beside them.
+function paintKFZ(d, ctx, g, W, H) {
+  fillBg(ctx, d.bg, W, H);
+  ctx.fillStyle = '#FFFFFF';
+  for (let i = 0; i < 3; i++) ctx.fillRect(H * 0.35 + i * H * 0.32, H * 0.14, H * 0.16, H * 0.72);
+  const m = d.main;
+  const f = fit(m.font, m.text, W * 0.4, H * 0.5);
+  drawText(ctx, m.font, m.text, f, H * 1.55 + f.w / 2, H * 0.5, { color: '#FFFFFF' });
+  const fs = fit('900 Noto Sans KR|ko', '크리스피 치킨', W * 0.3, H * 0.16);
+  drawText(ctx, '900 Noto Sans KR|ko', '크리스피 치킨', fs, W - H * 0.4 - fs.w / 2, H * 0.5, { color: '#FFFFFF' });
+}
+
+// Two-colour wordmark with arrows on its first and last letter.
+function paintSubway(d, ctx, g, W, H) {
+  fillBg(ctx, d.bg, W, H);
+  const m = d.main;
+  const f = fit(m.font, m.text, W * 0.5, H * 0.46);
+  drawText(ctx, m.font, m.text, f, W / 2, H * 0.5, { parts: m.parts, color: m.color });
+  ctx.fillStyle = '#FFC20E';
+  const ay = H * 0.5;
+  const ax0 = W / 2 - f.w / 2 - H * 0.1;
+  const ax1 = W / 2 + f.w / 2 + H * 0.1;
+  ctx.beginPath();
+  ctx.moveTo(ax0 - H * 0.22, ay);
+  ctx.lineTo(ax0, ay - H * 0.14);
+  ctx.lineTo(ax0, ay + H * 0.14);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(ax1 + H * 0.22, ay);
+  ctx.lineTo(ax1, ay - H * 0.14);
+  ctx.lineTo(ax1, ay + H * 0.14);
+  ctx.fill();
+}
+
 function paintH(d, ctx, g, W, H) {
   if (d.layout === 'bands7') return paintBands7(d, ctx, g, W, H);
+  if (d.layout === 'bk') return paintBK(d, ctx, g, W, H);
+  if (d.layout === 'kfz') return paintKFZ(d, ctx, g, W, H);
+  if (d.layout === 'subway') return paintSubway(d, ctx, g, W, H);
   if (d.layout === 'gg') return paintGG(d, ctx, g, W, H);
   if (d.layout === 'cu') return paintCU(d, ctx, g, W, H);
   const m = d.main;
@@ -1312,7 +1384,8 @@ async function loadFonts(designs) {
     d.items?.forEach((it) => add(it.font, it.n + it.p));
     if (d.led) add('800 Montserrat|latin', d.led.text);
     if (d.layout === 'gg') { add('600 Montserrat|latin', 'Lifestyle Platform'); add('700 Noto Sans KR|ko', '홍대점'); }
-    if (d.layout === 'cu') add('600 Montserrat|latin', 'Nice to');
+    if (d.layout === 'cu') add('600 Montserrat|latin', '(Be)');
+    if (d.layout === 'kfz') add('900 Noto Sans KR|ko', '크리스피 치킨');
     if (d.band) { add('900 Noto Sans KR', d.band.name); add('700 Noto Sans KR', d.band.goods); emo(d.band.glyph); addMark(d.band.mark); }
     if (d.floorTag) add('900 Noto Sans KR', d.floorTag.text);
     addMark(d.mark);

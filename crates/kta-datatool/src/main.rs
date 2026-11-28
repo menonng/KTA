@@ -129,6 +129,29 @@ fn classify(t: &Tags, id: u64) -> Option<(String, &'static str, &'static str, bo
     if has("롯데리아") || has("Lotteria") {
         return b("라떼리아", "#FFFFFF", "#DA291C");
     }
+    // Fast food (parody names verified in brand-bible.md).
+    let fast_food = t.get("amenity") == Some(&"fast_food") || t.get("amenity") == Some(&"restaurant");
+    if has("맥도날드") || has("McDonald") {
+        return b("맥로날드", "#FFFFFF", "#27272A");
+    }
+    if has("버거킹") || has("Burger King") || has("BURGER KING") {
+        return b("버거퀸", "#D62300", "#502314");
+    }
+    if has("맘스터치") || has("Mom's Touch") {
+        return b("맘스펀치", "#FFFFFF", "#D7141A");
+    }
+    if has("노브랜드") || has("No brand Burger") || has("No Brand Burger") || has("NO BRAND") {
+        return b("노네임 버거", "#111111", "#FFD400");
+    }
+    if has("KFC") {
+        return b("KFZ", "#FFFFFF", "#C8102E");
+    }
+    if fast_food && (name == "Subway" || name.contains("써브웨이") || brand == "Subway") {
+        return b("써브와이", "#FFFFFF", "#00873C");
+    }
+    if has("쉐이크쉑") || has("Shake Shack") {
+        return b("쉐이크쇼크", "#FFFFFF", "#202124");
+    }
     if has("롯데시네마") {
         return b("라떼시네마", "#FFFFFF", "#ED1C24");
     }
@@ -301,6 +324,22 @@ fn main() {
             _ => {}
         }
     }
+    // Chain stores missing from OSM. Coordinates: Nominatim geocodes of the
+    // published addresses where known (맘스터치 랩 양화로 129, 쉐이크쉑 양화로 186);
+    // McDonald's / Burger King are approximate spots on 양화로 between them
+    // (exact branch addresses could not be confirmed).
+    let extra: [(i64, f64, f64, &str); 4] = [
+        (-9_000_001, 37.5550608, 126.9206937, "맘스터치"),
+        (-9_000_002, 37.5576790, 126.9258420, "쉐이크쉑"),
+        (-9_000_003, 37.5559300, 126.9224100, "맥도날드"),
+        (-9_000_004, 37.5568100, 126.9241300, "버거킹"),
+    ];
+    for (id, lat, lon, name) in extra {
+        let mut t: Tags = HashMap::new();
+        t.insert("name", name);
+        t.insert("amenity", "fast_food");
+        poi_nodes.push((id, lat, lon, t));
+    }
     let (lat0, lon0) = if !station_pts.is_empty() {
         let k = station_pts.len() as f64;
         (station_pts.iter().map(|p| p.0).sum::<f64>() / k, station_pts.iter().map(|p| p.1).sum::<f64>() / k)
@@ -467,6 +506,74 @@ fn main() {
                 }
             }
         }
+    }
+
+    // Real footprints, heights and floor counts (국토교통부 GIS건물통합정보,
+    // clipped by tools/asset-pipeline/extract_buildings.py) replace the OSM
+    // buildings when the file is there. OSM heights fill gaps where the
+    // register has neither height nor floors.
+    let gis_path = args.get(5).cloned().unwrap_or_else(|| "data-src/gis/hongdae_buildings.tsv".into());
+    if let Ok(txt) = std::fs::read_to_string(&gis_path) {
+        let osm_b = std::mem::take(&mut buildings);
+        let (mut n_h, mut n_fl, mut n_fb) = (0, 0, 0);
+        for (li, line) in txt.lines().enumerate() {
+            if line.starts_with('#') || line.trim().is_empty() {
+                continue;
+            }
+            let f: Vec<&str> = line.split('\t').collect();
+            if f.len() < 4 {
+                continue;
+            }
+            let h: f32 = f[0].parse().unwrap_or(0.0);
+            let fl: f32 = f[1].parse().unwrap_or(0.0);
+            let k: u8 = f[2].parse().unwrap_or(0);
+            let mut pts: Vec<P2> = f[3]
+                .split(';')
+                .filter_map(|q| {
+                    let (a, b) = q.split_once(',')?;
+                    Some(pr.p(a.parse().ok()?, b.parse().ok()?))
+                })
+                .collect();
+            if !pts.iter().all(|p| inside(*p)) {
+                continue;
+            }
+            clean_polygon(&mut pts, 0.25);
+            if pts.len() < 3 {
+                continue;
+            }
+            let area = signed_area(&pts).abs();
+            if area < 6.0 {
+                continue;
+            }
+            let id = hash(0x6a15 + li as u64);
+            let height = if h > 2.5 {
+                n_h += 1;
+                h
+            } else if fl > 0.0 {
+                n_fl += 1;
+                fl * 3.3 + 0.6
+            } else {
+                n_fb += 1;
+                let c = pts.iter().fold([0.0f32, 0.0], |s, p| [s[0] + p[0], s[1] + p[1]]);
+                let c = [c[0] / pts.len() as f32, c[1] / pts.len() as f32];
+                osm_b
+                    .iter()
+                    .find(|b| kta_core::geom::point_in_polygon(c, &b.pts))
+                    .map(|b| b.height)
+                    .unwrap_or(if area < 120.0 { 6.6 } else { 9.9 })
+            };
+            let height = height.clamp(3.0, 250.0);
+            let levels = if fl > 0.0 { fl } else { (height / 3.3).round() };
+            buildings.push(Building {
+                pts,
+                height,
+                levels: levels.clamp(1.0, 255.0) as u8,
+                kind: k.min(4),
+                seed: (id >> 16) as u16,
+                ..Default::default()
+            });
+        }
+        eprintln!("GIS buildings: {} (height {}, floors {}, fallback {}) replacing {} OSM buildings", buildings.len(), n_h, n_fl, n_fb, osm_b.len());
     }
 
     // Subway entrances, oriented along the nearest road.
@@ -637,7 +744,9 @@ fn main() {
             let mut floor = start_floor;
             let mut placed = false;
             while floor < 12 {
-                let y = if floor == 0 { 3.55 } else { floor as f32 * 3.3 + 1.7 };
+                // Every floor's sign sits on the band above its windows (the
+                // ground fascia included), not across the glass.
+                let y = floor as f32 * 3.3 + 3.55;
                 if y + hgt * 0.5 > b.height - 0.2 {
                     break;
                 }
@@ -788,7 +897,8 @@ fn main() {
         Pool { uses: vec![Vec::new(); ix.len()], ix, h: salt ^ 0x1234 }
     };
     let mut pool_f = make_pool(&mut labels, "fascia", 560, GROUND, 6.5, &[1.15], 0xf1);
-    let mut pool_u = make_pool(&mut labels, "upper", 340, UPPER, 6.0, &[0.95], 0xf2);
+    let mut pool_u = make_pool(&mut labels, "upper", 220, UPPER, 6.0, &[0.95], 0xf2);
+    let mut pool_s = make_pool(&mut labels, "sheet", 160, UPPER, 6.0, &[0.95], 0xf5);
     let mut pool_v = make_pool(&mut labels, "vert", 200, VERT, 0.72, &[2.6, 3.2, 3.8, 4.4], 0xf3);
     let ads: [(&str, &str, &str); 12] = [
         ("기가커피", "#3A2416", "#FFD400"), ("라떼", "#FFFFFF", "#DA291C"), ("심송", "#FFFFFF", "#1428A0"),
@@ -869,8 +979,10 @@ fn main() {
                 continue;
             }
             let s = sclamp(rnd() * len, w * 0.5 + 0.2, len - w * 0.5 - 0.2);
-            let y = floor as f32 * 3.3 + 1.7;
-            if y + 0.6 > b.height {
+            // Window lettering goes on the glass; panels on the band above the windows.
+            let sheet = rnd() < 0.42;
+            let y = floor as f32 * 3.3 + if sheet { 1.75 } else { 3.55 };
+            if y + 0.6 > b.height - 0.1 {
                 continue;
             }
             let occ = occupancy.entry((bi, ei)).or_default();
@@ -879,16 +991,21 @@ fn main() {
             }
             occ.push((s - w * 0.5, s + w * 0.5, floor));
             let p = [a[0] + dir[0] * s + nrm[0] * 0.25, a[1] + dir[1] * s + nrm[1] * 0.25];
-            let k = pool_u.pick(p);
-            let li = pool_u.ix[k];
+            let li = if sheet {
+                let k = pool_s.pick(p);
+                pool_s.ix[k]
+            } else {
+                let k = pool_u.pick(p);
+                pool_u.ix[k]
+            };
             signs.push(Sign { x: p[0], z: p[1], y, yaw: nrm[0].atan2(nrm[1]), w, h: 0.95, label: li, vertical: false, mount: 0 });
             extra_n += 1;
         }
         // Top-floor church with its rooftop neon cross.
         if lv >= 4 && lv <= 9 && rnd() < 0.035 {
-            let floor = lv - 1;
+            let floor = lv - 2;
             let w = (len * 0.5).clamp(3.0, 5.5).min(len - 0.4);
-            let y = floor as f32 * 3.3 + 1.7;
+            let y = floor as f32 * 3.3 + 3.55;
             let s = len * 0.5;
             let occ = occupancy.entry((bi, ei)).or_default();
             if w > 2.0 && y + 0.6 < b.height && !occ.iter().any(|&(o0, o1, f)| f == floor && s - w * 0.5 < o1 + 0.2 && s + w * 0.5 > o0 - 0.2) {

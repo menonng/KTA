@@ -55,9 +55,69 @@ void main() {
   gl_FragColor = vec4(texture2D(tSrc, vUv).rgb + l * 0.25, 1.0);
 }`;
 
+// Screen-space ambient occlusion at half resolution from the scene depth:
+// view-space hemisphere samples around the depth-derived normal.
+const aoFs = /* glsl */ `
+uniform sampler2D tDepth;
+uniform mat4 uProj;
+uniform mat4 uProjInv;
+uniform vec2 uTexel;
+uniform vec3 uKernel[12];
+uniform float uRadius;
+varying vec2 vUv;
+vec3 viewPos(vec2 uv) {
+  float d = texture2D(tDepth, uv).x;
+  vec4 v = uProjInv * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+  return v.xyz / v.w;
+}
+float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+void main() {
+  float d0 = texture2D(tDepth, vUv).x;
+  if (d0 >= 0.99999) { gl_FragColor = vec4(1.0); return; }
+  vec3 p = viewPos(vUv);
+  vec3 pr = viewPos(vUv + vec2(uTexel.x, 0.0));
+  vec3 pl = viewPos(vUv - vec2(uTexel.x, 0.0));
+  vec3 pu = viewPos(vUv + vec2(0.0, uTexel.y));
+  vec3 pd = viewPos(vUv - vec2(0.0, uTexel.y));
+  vec3 dx = abs(pr.z - p.z) < abs(p.z - pl.z) ? pr - p : p - pl;
+  vec3 dy = abs(pu.z - p.z) < abs(p.z - pd.z) ? pu - p : p - pd;
+  vec3 n = normalize(cross(dx, dy));
+  float a = hash(gl_FragCoord.xy) * 6.2831853;
+  vec3 rv = vec3(cos(a), sin(a), 0.0);
+  vec3 t = normalize(rv - n * dot(rv, n));
+  vec3 b = cross(n, t);
+  mat3 tbn = mat3(t, b, n);
+  float rad = uRadius * clamp(-p.z / 6.0, 0.6, 2.5);
+  float occ = 0.0;
+  for (int i = 0; i < 12; i++) {
+    vec3 sp = p + tbn * uKernel[i] * rad;
+    vec4 c = uProj * vec4(sp, 1.0);
+    vec2 suv = c.xy / c.w * 0.5 + 0.5;
+    if (suv.x < 0.0 || suv.y < 0.0 || suv.x > 1.0 || suv.y > 1.0) continue;
+    float sz = viewPos(suv).z;
+    float range = smoothstep(0.0, 1.0, rad / max(abs(p.z - sz), 1e-3));
+    occ += step(sp.z + 0.04 * rad, sz) * range;
+  }
+  float ao = 1.0 - occ / 12.0;
+  gl_FragColor = vec4(vec3(ao), 1.0);
+}`;
+
+// 4x4 box blur of the AO term (kills the per-pixel rotation noise).
+const aoBlurFs = /* glsl */ `
+uniform sampler2D tAO;
+uniform vec2 uTexel;
+varying vec2 vUv;
+void main() {
+  float s = 0.0;
+  for (int x = -2; x < 2; x++) for (int y = -2; y < 2; y++) s += texture2D(tAO, vUv + (vec2(x, y) + 0.5) * uTexel).r;
+  gl_FragColor = vec4(vec3(s / 16.0), 1.0);
+}`;
+
 const compFs = /* glsl */ `
 uniform sampler2D tScene;
 uniform sampler2D tBloom;
+uniform sampler2D tAO;
+uniform float uAO;
 uniform float uExposure;
 uniform vec3 uTint;
 uniform vec3 uShadow;
@@ -93,7 +153,8 @@ vec3 fxaa(vec2 uv) {
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 void main() {
-  vec3 c = fxaa(vUv) + texture2D(tBloom, vUv).rgb * uBloom;
+  float ao = mix(1.0, texture2D(tAO, vUv).r, uAO);
+  vec3 c = fxaa(vUv) * ao + texture2D(tBloom, vUv).rgb * uBloom;
   c *= uExposure * uTint / 0.6; // same pre-scale as three.js ACESFilmic
   float L = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c *= mix(uShadow, uHigh, smoothstep(0.02, 0.8, L));
@@ -119,6 +180,11 @@ export class Post {
   private downMat: THREE.ShaderMaterial;
   private upMat: THREE.ShaderMaterial;
   private compMat: THREE.ShaderMaterial;
+  private aoMat: THREE.ShaderMaterial;
+  private aoBlurMat: THREE.ShaderMaterial;
+  private ao!: THREE.WebGLRenderTarget;
+  private aoBlur!: THREE.WebGLRenderTarget;
+  aoStrength = 0.75;
   bytes = 0;
 
   constructor(private renderer: THREE.WebGLRenderer) {
@@ -155,6 +221,32 @@ export class Post {
       depthTest: false,
       depthWrite: false,
     });
+    // Hemisphere kernel, denser near the centre.
+    const kernel: THREE.Vector3[] = [];
+    let seed = 3;
+    const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+    for (let i = 0; i < 12; i++) {
+      const v = new THREE.Vector3(rnd() * 2 - 1, rnd() * 2 - 1, rnd() * 0.85 + 0.15).normalize();
+      const k = (i + 1) / 12;
+      v.multiplyScalar(0.15 + 0.85 * k * k);
+      kernel.push(v);
+    }
+    this.aoMat = new THREE.ShaderMaterial({
+      vertexShader: vs,
+      fragmentShader: aoFs,
+      uniforms: { tDepth: { value: null }, uProj: { value: new THREE.Matrix4() }, uProjInv: { value: new THREE.Matrix4() }, uTexel: { value: new THREE.Vector2() }, uKernel: { value: kernel }, uRadius: { value: 0.75 } },
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.aoBlurMat = new THREE.ShaderMaterial({
+      vertexShader: vs,
+      fragmentShader: aoBlurFs,
+      uniforms: { tAO: { value: null }, uTexel: { value: new THREE.Vector2() } },
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.compMat.uniforms.tAO = { value: null };
+    this.compMat.uniforms.uAO = { value: 0.75 };
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.compMat);
     this.quad.frustumCulled = false;
     this.qscene.add(this.quad);
@@ -183,9 +275,15 @@ export class Post {
     this.down.forEach((t) => t.dispose());
     this.up.forEach((t) => t.dispose());
     this.scene = mk(w, h, true);
+    this.scene.depthTexture = new THREE.DepthTexture(w, h, THREE.UnsignedIntType);
+    this.ao?.dispose();
+    this.aoBlur?.dispose();
+    const aoT = () => new THREE.WebGLRenderTarget(Math.ceil(w / 2), Math.ceil(h / 2), { type: THREE.UnsignedByteType, format: THREE.RedFormat, depthBuffer: false, stencilBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+    this.ao = aoT();
+    this.aoBlur = aoT();
     this.down = [4, 8, 16].map((d) => mk(Math.ceil(w / d), Math.ceil(h / d), false));
     this.up = [4, 8].map((d) => mk(Math.ceil(w / d), Math.ceil(h / d), false));
-    this.bytes = w * h * (bpp + 4) + [...this.down, ...this.up].reduce((s, t) => s + t.width * t.height * bpp, 0);
+    this.bytes = w * h * (bpp + 4) + [...this.down, ...this.up].reduce((s, t) => s + t.width * t.height * bpp, 0) + this.ao.width * this.ao.height * 2;
     this.compMat.uniforms.uTexel.value.set(1 / w, 1 / h);
   }
 
@@ -206,6 +304,17 @@ export class Post {
     const r = this.renderer;
     r.setRenderTarget(this.scene);
     r.render(scene, camera);
+    // Ambient occlusion (half res) + blur.
+    const cam = camera as THREE.PerspectiveCamera;
+    const au = this.aoMat.uniforms;
+    au.tDepth.value = this.scene.depthTexture;
+    au.uProj.value.copy(cam.projectionMatrix);
+    au.uProjInv.value.copy(cam.projectionMatrixInverse);
+    au.uTexel.value.set(1 / this.scene.width, 1 / this.scene.height);
+    this.pass(this.aoMat, this.ao);
+    this.aoBlurMat.uniforms.tAO.value = this.ao.texture;
+    this.aoBlurMat.uniforms.uTexel.value.set(1 / this.ao.width, 1 / this.ao.height);
+    this.pass(this.aoBlurMat, this.aoBlur);
     // Downsample chain (first pass thresholds).
     let src: THREE.WebGLRenderTarget = this.scene;
     this.down.forEach((t, i) => {
@@ -228,6 +337,8 @@ export class Post {
     const u = this.compMat.uniforms;
     u.tScene.value = this.scene.texture;
     u.tBloom.value = this.up[0].texture;
+    u.tAO.value = this.aoBlur.texture;
+    u.uAO.value = this.aoStrength;
     u.uExposure.value = g.exposure;
     u.uTint.value.copy(g.tint);
     u.uShadow.value.copy(g.shadow);

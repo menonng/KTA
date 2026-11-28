@@ -89,6 +89,8 @@ export const BRAND_LATIN = {
   스타덕스: ['STARDUCKS', 'COFFEE'], 식스텐: ['SIX-TEN', ''], 올리브올드: ['OLIVE OLD', ''], 다사소: ['DASASO', '다사소'],
   라떼리아: ['LATTERIA', ''], 라떼시네마: ['LATTE CINEMA', ''], 기가박스: ['GIGABOX', ''], 기가커피: ['GIGA COFFEE', ''],
   심송: ['SIMSONG', ''], 뭐신사: ['MWOSINSA', ''], '뭐신사 스탠다드': ['MWOSINSA STANDARD', ''],
+  맥로날드: ["McRonald's", ''], 버거퀸: ['BURGER QUEEN', ''], 맘스펀치: ["MOM'S PUNCH", ''], '노네임 버거': ['NO NAME BURGER', ''],
+  KFZ: ['KFZ', ''], 써브와이: ['SUBWHY', ''], 쉐이크쇼크: ['SHAKE SHOCK', ''],
 };
 
 // ---------------------------------------------------------------- categories
@@ -465,14 +467,16 @@ const STYLE_W = {
     cafe: [['galva', 46], ['channel', 38], ['flex', 10], ['neon', 6]],
     latin: [['galva', 38], ['channel', 34], ['neon', 14], ['flex', 14]],
   },
+  // Upper-floor panels sit on the band between floors; window lettering is
+  // its own request kind ('sheet', placed on the glass by the datatool).
   upper: {
-    trad: [['flex', 60], ['sheet', 40]],
-    snack: [['flex', 60], ['sheet', 40]],
-    night: [['flex', 50], ['sheet', 40], ['neon', 10]],
-    pro: [['sheet', 55], ['flex', 40], ['channel', 5]],
-    beauty: [['sheet', 45], ['channel', 35], ['flex', 20]],
-    cafe: [['sheet', 40], ['channel', 40], ['galva', 20]],
-    latin: [['sheet', 35], ['channel', 35], ['neon', 15], ['galva', 15]],
+    trad: [['flex', 85], ['galva', 15]],
+    snack: [['flex', 90], ['channel', 10]],
+    night: [['flex', 75], ['neon', 12], ['channel', 13]],
+    pro: [['flex', 80], ['channel', 12], ['galva', 8]],
+    beauty: [['flex', 45], ['channel', 35], ['galva', 20]],
+    cafe: [['flex', 30], ['channel', 40], ['galva', 30]],
+    latin: [['flex', 30], ['channel', 40], ['neon', 15], ['galva', 15]],
   },
 };
 
@@ -543,7 +547,7 @@ export function makeDesign(req, index) {
   d.fb = nm.script;
   const icon = info.i.length ? r.pick(info.i) : null;
   const menu = info.m.length ? r.pick(info.m) : null;
-  const upper = kind === 'upper';
+  const upper = kind === 'upper' || kind === 'sheet';
 
   // Foreign-origin shops follow their own sign traditions.
   if (nm.flavor === 'ja') return japaneseDesign(r, d, nm, icon, upper);
@@ -554,7 +558,7 @@ export function makeDesign(req, index) {
   const latin = nm.script === 'latin';
   // Latin-named shops in Korean trades (e.g. a hair salon) keep their trade's look.
   const vibe = latin && !['night', 'trad', 'snack', 'pro', 'beauty', 'cafe'].includes(info.v) ? 'latin' : info.v;
-  const style = weighted(r, (STYLE_W[upper ? 'upper' : 'fascia'][vibe]) || STYLE_W.fascia.pro);
+  const style = kind === 'sheet' ? 'sheet' : weighted(r, (STYLE_W[upper ? 'upper' : 'fascia'][vibe]) || STYLE_W.fascia.pro);
   d.style = style;
   const mainFont = latin ? latinFont(r, vibe) : koFont(r, info.v);
 
@@ -754,6 +758,16 @@ const BRAND_STYLE = {
   라떼시네마: { bg: { type: 'panel', c1: '#ED1C24' }, parts: [['LATTE CINEMA', '#FFFFFF']], font: '800 Montserrat', frame: '#B5151B' },
   뭐신사: { bg: { type: 'panel', c1: '#FFFFFF' }, parts: [['MWOSINSA', '#111111']], font: '800 Montserrat', spacing: 10, frame: '#E8E8E6' },
   '뭐신사 스탠다드': { bg: { type: 'panel', c1: '#F4F4F2' }, parts: [['MWOSINSA STANDARD', '#111111']], font: '700 Montserrat', spacing: 8, frame: '#E8E8E6' },
+  // Fast food (parodies of the real fronts): charcoal front with the yellow
+  // double arch; brown front with the bun logo; red/white bucket stripes;
+  // green front with arrowed SUB/WAY lettering; yellow No Brand front.
+  맥로날드: { bg: { type: 'panel', c1: '#27272A' }, parts: [["McRonald's", '#FFFFFF']], font: '800 Montserrat', mark: { type: 'arches', fg: '#FFC72C' }, sub: ['24시 · 맥딜리버리', '#FFC72C', '700 Noto Sans KR'], frame: '#27272A', glow: 'letters' },
+  버거퀸: { bg: { type: 'panel', c1: '#502314' }, parts: [['BURGER QUEEN', '#D62300']], font: 'Archivo Black', layout: 'bk', full: true, frame: '#3A190E' },
+  맘스펀치: { bg: { type: 'panel', c1: '#D7141A' }, parts: [["MOM'S PUNCH", '#FFFFFF']], font: 'Archivo Black', sub: ['맘스펀치 · 싸이버거', '#FFD400', '900 Noto Sans KR'], mark: { type: 'badge', glyph: '🍔', bg: '#FFD400', fg: '#D7141A', ring: '#FFFFFF' }, frame: '#A50F14' },
+  '노네임 버거': { bg: { type: 'panel', c1: '#FFD400' }, parts: [['NO NAME BURGER', '#111111']], font: 'Archivo Black', sub: ['NNB', '#111111', '800 Montserrat'], frame: '#FFD400' },
+  KFZ: { bg: { type: 'panel', c1: '#C8102E' }, parts: [['KFZ', '#FFFFFF']], font: 'Archivo Black', layout: 'kfz', full: true, frame: '#A00D25' },
+  써브와이: { bg: { type: 'panel', c1: '#00873C' }, parts: [['SUB', '#FFFFFF'], ['WHY', '#FFC20E']], font: 'Archivo Black', layout: 'subway', full: true, frame: '#006A2F' },
+  쉐이크쇼크: { bg: { type: 'brushed', c1: '#202124' }, parts: [['SHAKE SHOCK', '#FFFFFF']], font: '700 Montserrat', spacing: 8, mark: { type: 'tile', glyph: '🍔', bg: '#7AC143', fg: '#202124' }, frame: '#2A2B2E', glow: 'letters' },
   또롱이: { bg: { type: 'panel', c1: '#3BAA34' }, parts: [['또롱이', '#FFFFFF']], font: 'Jua', mark: { type: 'badge', glyph: '🚲', bg: '#FFFFFF', fg: '#3BAA34', ring: '#FFFFFF' }, frame: null },
 };
 
@@ -1021,4 +1035,4 @@ function bannerDesign(r, d) {
   return d;
 }
 
-export const DENSITY = { fascia: 56, vert: 56, stack: 46, upper: 44, banner: 40, board: 30, exit: 72, decal: 50, stand: 60, awning: 40, disc: 80, band: 56, cross: 24 };
+export const DENSITY = { sheet: 44, fascia: 56, vert: 56, stack: 46, upper: 44, banner: 40, board: 30, exit: 72, decal: 50, stand: 60, awning: 40, disc: 80, band: 56, cross: 24 };

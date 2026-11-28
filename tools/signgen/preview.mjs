@@ -14,7 +14,7 @@ const [outDir = join(here, 'work'), set = 'all'] = process.argv.slice(2);
 mkdirSync(outDir, { recursive: true });
 if (!existsSync(join(here, 'fonts.css'))) throw new Error('run gen.mjs once first (writes fonts.css)');
 
-const brands = ['GG24', 'CUZ', '식스텐', '스타덕스', '기가커피', '빡다방', '올리브올드', '다사소', '라떼리아', '기겁떡볶이', '인생여덟컷', '너희은행', 'SQ텔레콤', 'QT', '뭐신사 스탠다드', '라떼마트'];
+const brands = ['맥로날드', '버거퀸', '맘스펀치', '노네임 버거', 'KFZ', '써브와이', '쉐이크쇼크', '라떼리아', 'GG24', 'CUZ', '식스텐', '스타덕스', '기가커피', '빡다방', '올리브올드', '다사소', '라떼리아', '기겁떡볶이', '인생여덟컷', '너희은행', 'SQ텔레콤', 'QT', '뭐신사 스탠다드', '라떼마트'];
 const shopCats = ['cafe', 'korean', 'bbq', 'chicken', 'snack', 'hair', 'clinic', 'pharmacy', 'realestate', 'clothes', 'bar', 'hof', 'karaoke', 'pc', 'bakery', 'dessert', 'cosmetics', 'nail', 'academy', 'restaurant', 'izakaya', 'chinese', 'italian', 'phone'];
 const sets = {
   brands: [

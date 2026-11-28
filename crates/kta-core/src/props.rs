@@ -525,6 +525,36 @@ impl Props {
                 self.cyl([q[0], 0.0, q[1]], 0.055, h + 0.6, 5, rgb(if rng.f() < 0.5 { 0xcfcfcf } else { 0x6b6b6b }));
             }
 
+            // Rooftop clutter (옥상): stair tower (계단실/옥탑) by a corner and a
+            // water tank on a stand on many mid-rise blocks.
+            if h >= 8.0 && area > 45.0 {
+                let k0 = (rng.f() * n as f32) as usize % n;
+                let v0 = b.pts[k0];
+                let dc = [c[0] - v0[0], c[1] - v0[1]];
+                let dl = (dc[0] * dc[0] + dc[1] * dc[1]).sqrt().max(1e-3);
+                let sz = (area.sqrt() * 0.28).clamp(2.2, 4.2);
+                let q = [v0[0] + dc[0] / dl * (sz * 0.85), v0[1] + dc[1] / dl * (sz * 0.85)];
+                let e = b.pts[(k0 + 1) % n];
+                let ey = yaw_of([e[1] - v0[1], v0[0] - e[0]]);
+                if crate::geom::point_in_polygon(q, &b.pts) && rng.f() < 0.7 {
+                    let col = rng.pick(&[0xd8d4ca, 0xc9c4b8, 0xb9b2a4, 0xe2ddd2, 0x9aa0a4]);
+                    let th = rng.range(2.5, 2.9);
+                    self.bx([q[0], h + th * 0.5, q[1]], ey, [sz, th, sz * rng.range(0.8, 1.1)], rgb(col));
+                    self.bx([q[0], h + th + 0.08, q[1]], ey, [sz + 0.3, 0.16, sz * 1.1 + 0.3], rgb(0x8a8a84));
+                    // Door on one face.
+                    let (sn, cs) = ey.sin_cos();
+                    self.bx([q[0] + sn * (sz * 0.5 + 0.01), h + 1.0, q[1] + cs * (sz * 0.5 + 0.01)], ey, [0.9, 2.0, 0.04], rgb(0x4a5058));
+                }
+                if rng.f() < 0.5 {
+                    let q2 = [c[0] + rng.range(-1.5, 1.5), c[1] + rng.range(-1.5, 1.5)];
+                    if crate::geom::point_in_polygon(q2, &b.pts) {
+                        let tank = rng.pick(&[0xc7cbcf, 0xc7cbcf, 0x3a6ea5, 0x2f7d52, 0xd9d2c0]);
+                        let r = rng.range(0.6, 0.85);
+                        self.bx([q2[0], h + 0.25, q2[1]], 0.0, [r * 2.2, 0.5, r * 2.2], rgb(0x6b6e70));
+                        self.cyl([q2[0], h + 0.5, q2[1]], r, rng.range(1.4, 1.9), 12, rgb(tank));
+                    }
+                }
+            }
             // Outdoor AC units grouped on flat roofs.
             if h >= 6.0 && area > 60.0 && rng.f() < 0.55 {
                 let n = 1 + (rng.f() * 3.0) as usize;
