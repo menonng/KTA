@@ -198,6 +198,9 @@ export function retarget(clip, s, p, body, fps, inPlace) {
       const prim = m3.apply(H, v3.sub(pt, pf));
       const sec = m3.apply(H, m3.apply(W[I[from]], AXIS[ax]));
       let Wt = m3.mul(frame(prim, sec), m3.T(restB[bi]));
+      // Feet keep their own rest angle (heels, sneakers) and take only the source's rotation from
+      // its rest pose (the BVH rest has identity joint rotations).
+      if (b.startsWith('foot.')) Wt = m3.mul(m3.mul(H, W[I[from]]), m3.T(H));
       // Posture: the capture subjects stoop a little; stand taller, lift the gaze, drop the shoulders.
       const corr = POSTURE[b];
       if (corr) Wt = m3.mul(m3.mul(m3.rot('Z', corr[1]), m3.rot('X', corr[0])), Wt);
@@ -237,3 +240,93 @@ export function retarget(clip, s, p, body, fps, inPlace) {
   return { data: outF, frames: n, speed };
 }
 
+
+// ------------------------------------------------------------------ designed idle
+/** Rotation matrix taking unit vector a onto unit vector b (shortest arc). */
+export function rotFromTo(a, b) {
+  const ax = v3.cross(a, b);
+  const s = v3.len(ax);
+  const c = Math.max(-1, Math.min(1, v3.dot(a, b)));
+  if (s < 1e-8) return m3.I();
+  return rodrigues(v3.scale(ax, 1 / s), Math.atan2(s, c));
+}
+export function rodrigues(k, ang) {
+  const c = Math.cos(ang), s = Math.sin(ang), t = 1 - c;
+  const [x, y, z] = k;
+  return [c + x * x * t, x * y * t - z * s, x * z * t + y * s, y * x * t + z * s, c + y * y * t, y * z * t - x * s, z * x * t - y * s, z * y * t + x * s, c + z * z * t];
+}
+
+/**
+ * A relaxed standing loop designed for the game (instead of a stiff capture): weight on one leg
+ * (contrapposto) shifting to the other and back, chest up, shoulders down, arms hanging with soft
+ * elbows, breathing, slow glances around. Feet stay planted (two-bone IK). body: { pivot, defs }.
+ * The character faces +Z, its left side is +X. Returns frames like retarget().
+ */
+export function designedIdle(body, fps = 30, seconds = 12) {
+  const n = Math.round(fps * seconds);
+  const P = (b) => body.pivot[BI[b]];
+  const restDir = (b) => v3.norm(v3.sub(body.defs[b][2], body.defs[b][1]));
+  const stride = 3 + BONES.length * 4;
+  const out = new Float32Array(n * stride);
+  const D = Math.PI / 180;
+  const Rx = (a) => m3.rot('X', a / D), Ry = (a) => m3.rot('Y', a / D), Rz = (a) => m3.rot('Z', a / D);
+  const legLen = (s) => [v3.len(v3.sub(P(`lowerleg.${s}`), P(`upperleg.${s}`))), v3.len(v3.sub(P(`foot.${s}`), P(`lowerleg.${s}`)))];
+  for (let k = 0; k < n; k++) {
+    const t = k / fps;
+    const ph = (2 * Math.PI * t) / seconds;
+    // Weight shift: held stance, quick change (left = +1).
+    const st = Math.tanh(3 * Math.sin(ph)) / Math.tanh(3);
+    const breath = Math.sin((2 * Math.PI * t) / (seconds / 3));
+    const sway = Math.sin((2 * Math.PI * t) / (seconds / 2) + 0.7);
+    const W = {};
+    // Pelvis: over the standing leg, its hip raised, slight turn.
+    const rootOff = [0.028 * st + 0.004 * sway, -0.012 * Math.abs(st) - 0.004, 0.0];
+    W.root = m3.mul(Ry(2.5 * D * st), Rz(3.0 * D * st));
+    // Spine counter-curves so the shoulders stay nearly level; chest lifts on the in-breath.
+    W.spineLow = m3.mul(W.root, Rz(-1.8 * D * st));
+    W.spineMid = m3.mul(W.spineLow, m3.mul(Rz(-0.9 * D * st), Rx(-1.5 * D)));
+    W.chest = m3.mul(W.spineMid, m3.mul(Rx((-2.5 - 1.2 * breath) * D), Rz(-0.6 * D * st)));
+    // Head: level gaze with slow glances.
+    const lookY = 9 * D * Math.sin(ph + 1.3) + 4 * D * Math.sin(3 * ph + 0.4);
+    const lookP = -2 * D + 2 * D * Math.sin(2 * ph + 2.1);
+    W.neck = m3.mul(Ry(lookY * 0.4), Rx(lookP * 0.5 - 4 * D));
+    W.head = m3.mul(Ry(lookY), Rx(lookP));
+    // Arms: hang under gravity, slightly away from the hips, soft elbows, palms facing the thighs.
+    for (const [s, side] of [['L', 1], ['R', -1]]) {
+      const swing = 1.2 * D * breath + 1.5 * D * st * side;
+      W[`clavicle.${s}`] = m3.mul(W.chest, Rz(-side * 6 * D));
+      const ua = v3.norm([side * 0.13, -1, 0.03 + Math.sin(swing) * 0.2]);
+      const la = v3.norm([side * 0.07, -0.94, 0.3]);
+      const wr = v3.norm([side * 0.02, -0.96, 0.27]);
+      W[`upperarm.${s}`] = rotFromTo(restDir(`upperarm.${s}`), ua);
+      W[`lowerarm.${s}`] = rotFromTo(restDir(`lowerarm.${s}`), la);
+      W[`wrist.${s}`] = rotFromTo(restDir(`wrist.${s}`), wr);
+    }
+    // Legs: two-bone IK to planted feet; the free leg's knee bends and its foot turns out.
+    const rootP = v3.add(P('root'), rootOff);
+    for (const [s, side] of [['L', 1], ['R', -1]]) {
+      const load = Math.max(0, st * side); // 1 = this leg carries the weight
+      const free = 1 - load;
+      const hip = v3.add(rootP, m3.apply(W.root, v3.sub(P(`upperleg.${s}`), P('root'))));
+      const ankle0 = P(`foot.${s}`);
+      const ankle = v3.add(ankle0, [side * 0.03 * free, 0.006 * free, 0.06 * free]);
+      const [l1, l2] = legLen(s);
+      const d = Math.min(v3.len(v3.sub(ankle, hip)), l1 + l2 - 1e-4);
+      const dir = v3.norm(v3.sub(ankle, hip));
+      const a = (l1 * l1 - l2 * l2 + d * d) / (2 * d);
+      const h = Math.sqrt(Math.max(0, l1 * l1 - a * a));
+      let bend = v3.sub([side * 0.15, 0, 1], v3.scale(dir, v3.dot([side * 0.15, 0, 1], dir)));
+      bend = v3.norm(bend);
+      const knee = v3.add(hip, v3.add(v3.scale(dir, a), v3.scale(bend, h)));
+      W[`upperleg.${s}`] = rotFromTo(restDir(`upperleg.${s}`), v3.norm(v3.sub(knee, hip)));
+      W[`lowerleg.${s}`] = rotFromTo(restDir(`lowerleg.${s}`), v3.norm(v3.sub(ankle, knee)));
+      W[`foot.${s}`] = Ry(side * (6 + 8 * free) * D);
+    }
+    const o = k * stride;
+    out[o] = rootOff[0];
+    out[o + 1] = rootOff[1];
+    out[o + 2] = rootOff[2];
+    BONES.forEach((b, bi) => out.set(quatFromM3(W[b]), o + 3 + bi * 4));
+  }
+  return { data: out, frames: n, speed: 0 };
+}

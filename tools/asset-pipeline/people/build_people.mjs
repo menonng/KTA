@@ -23,7 +23,9 @@ import { execFileSync } from 'node:child_process';
 import { MeshoptSimplifier } from 'meshoptimizer';
 import { NodeBasisEncoder } from 'ktx2-encoder';
 import { BONES, BI, PARENT } from '../humans/skeleton.mjs';
-import { loadClip, findLoop, retarget } from '../humans/motion.mjs';
+import { rodrigues } from '../humans/motion.mjs';
+import { v3, m3 } from '../humans/math.mjs';
+import { buildClips } from './clips.mjs';
 import { rasterUV, dilate } from '../humans/bake.mjs';
 
 const [EXTRACT, RB, OUT, TEX] = process.argv.slice(2);
@@ -37,6 +39,8 @@ mkdirSync(TEX, { recursive: true });
 await MeshoptSimplifier.ready;
 const basis = await new NodeBasisEncoder().init();
 const FAST = !!process.env.FAST;
+// SKIP_TEX=1: keep the existing texture files (geometry, skin weights and motion only).
+const SKIP_TEX = !!process.env.SKIP_TEX;
 
 // ------------------------------------------------------------------ variants
 // Crowd: Seoul in late November -- office workers in suits, hoodies and jackets,
@@ -111,6 +115,55 @@ function loadAvatar(rel) {
   const gOf = bones.map((b) => BI[gameBone(b.name)]);
   const eyeBone = bones.map((b) => /_[LR]Eye$/.test(b.name));
   const bpos = Object.fromEntries(bones.map((b) => [b.name, [b.world[12] * 0.01, b.world[13] * 0.01, b.world[14] * 0.01]]));
+  // Relaxed hands: the bind pose has flat, spread fingers. Curl each finger joint towards the palm
+  // (rotations about the joints, applied hierarchically, blended by the finger bones' skin weights).
+  const fingerT = new Map(); // biped bone index -> { R, t } in metres
+  const bi = Object.fromEntries(bones.map((b, i) => [b.name, i]));
+  for (const [s, side] of [['L', 1], ['R', -1]]) {
+    const pos = (n) => bpos[`Bip01_${s}_${n}`];
+    if (!pos('Finger1') || !pos('Finger4')) continue;
+    const across = v3.norm(v3.sub(pos('Finger1'), pos('Finger4')));
+    const handDir = v3.norm(v3.sub(pos('Finger2'), pos('Hand')));
+    let palm = v3.norm(v3.cross(handDir, across));
+    if (palm[0] * side > 0) palm = v3.scale(palm, -1); // palms face the thighs
+    const CURL = { 0: [6, 12, 10], 1: [16, 26, 16], 2: [20, 30, 18], 3: [24, 34, 20], 4: [28, 38, 22] };
+    for (let f = 0; f <= 4; f++) {
+      const chain = [`Finger${f}`, `Finger${f}1`, `Finger${f}2`];
+      let par = { R: m3.I(), t: [0, 0, 0] };
+      for (let j = 0; j < 3; j++) {
+        const id = bi[`Bip01_${s}_${chain[j]}`];
+        if (id === undefined) break;
+        const head = pos(chain[j]);
+        const next = j < 2 && pos(chain[j + 1]) ? pos(chain[j + 1]) : null;
+        const prev = j > 0 ? pos(chain[j - 1]) : pos('Hand');
+        const dir = v3.norm(next ? v3.sub(next, head) : v3.sub(head, prev));
+        const axis = v3.norm(v3.cross(dir, palm));
+        const h = v3.add(m3.apply(par.R, head), par.t);
+        const ax = v3.norm(m3.apply(par.R, axis));
+        const Rk = rodrigues(ax, (CURL[f][j] * Math.PI) / 180);
+        par = { R: m3.mul(Rk, par.R), t: v3.add(m3.apply(Rk, v3.sub(par.t, h)), h) };
+        fingerT.set(id, par);
+      }
+    }
+  }
+  const poseCorner = (c, p, n) => {
+    let wf = 0;
+    const pp = [0, 0, 0], nn = [0, 0, 0];
+    for (let j = 0; j < 4; j++) {
+      const T = fingerT.get(SI[c * 4 + j]);
+      const w = SW[c * 4 + j];
+      if (!T || w <= 0) continue;
+      const q = v3.add(m3.apply(T.R, p), T.t);
+      const r = m3.apply(T.R, n);
+      for (let k = 0; k < 3; k++) {
+        pp[k] += w * q[k];
+        nn[k] += w * r[k];
+      }
+      wf += w;
+    }
+    if (wf <= 0) return [p, n];
+    return [v3.add(pp, v3.scale(p, 1 - wf)), v3.norm(v3.add(nn, v3.scale(n, 1 - wf)))];
+  };
   // Corners -> welded vertices (position + uv + normal + material).
   const verts = [];
   const tri = [];
@@ -118,11 +171,12 @@ function loadAvatar(rel) {
   const map = new Map();
   for (let c = 0; c < nC; c++) {
     const x = P[c * 3], y = P[c * 3 + 1], z = P[c * 3 + 2];
-    const p = [(M[0] * x + M[4] * y + M[8] * z + M[12]) * 0.01, (M[1] * x + M[5] * y + M[9] * z + M[13]) * 0.01, (M[2] * x + M[6] * y + M[10] * z + M[14]) * 0.01];
+    let p = [(M[0] * x + M[4] * y + M[8] * z + M[12]) * 0.01, (M[1] * x + M[5] * y + M[9] * z + M[13]) * 0.01, (M[2] * x + M[6] * y + M[10] * z + M[14]) * 0.01];
     const nx = N[c * 3], ny = N[c * 3 + 1], nz = N[c * 3 + 2];
     let n = [M[0] * nx + M[4] * ny + M[8] * nz, M[1] * nx + M[5] * ny + M[9] * nz, M[2] * nx + M[6] * ny + M[10] * nz];
     const nl = Math.hypot(n[0], n[1], n[2]) || 1;
     n = n.map((v) => v / nl);
+    if (fingerT.size) [p, n] = poseCorner(c, p, n);
     const u = UV[c * 2], v = UV[c * 2 + 1];
     const k = `${mat[c]}|${p.map((q) => Math.round(q * 2e4)).join(',')}|${Math.round(u * 4096)},${Math.round(v * 4096)}|${n.map((q) => Math.round(q * 50)).join(',')}`;
     let id = map.get(k);
@@ -242,6 +296,80 @@ function buildVariant(name, spec) {
   const isHeadTri = (av, t) => av.triKind[t] === KIND.head || (av.triKind[t] === KIND.hair && HEADISH.has(dom(av.verts[av.tri[t * 3]])));
   const bodyTris = [];
   for (let t = 0; t < nT; t++) if (!(donor && isHeadTri(base, t))) bodyTris.push(t);
+  // Body opacity parts (if the base keeps hair-material pieces below the neck, e.g. lace) share the hair page:
+  // only allowed when the base is also the head source.
+  const bodyHasOpacity = bodyTris.some((t) => base.triKind[t] === KIND.hair);
+  if (bodyHasOpacity && donor) {
+    // drop them: their texture page belongs to the base
+    for (let i = bodyTris.length - 1; i >= 0; i--) if (base.triKind[bodyTris[i]] === KIND.hair) bodyTris.splice(i, 1);
+  }
+
+  // ---------------------------------------------------------------- geometry
+  const verts = [];
+  const tris = [];
+  const remap = (av, part) => {
+    const m = new Map();
+    return (vi) => {
+      let id = m.get(vi);
+      if (id === undefined) {
+        id = verts.length;
+        const v = av.verts[vi];
+        verts.push({ ...v, part });
+        m.set(vi, id);
+      }
+      return id;
+    };
+  };
+  const rb = remap(base, 'base');
+  for (const t of bodyTris) tris.push(rb(base.tri[t * 3]), rb(base.tri[t * 3 + 1]), rb(base.tri[t * 3 + 2]));
+  if (donor) {
+    const rd = remap(donor, 'donor');
+    for (let t = 0; t < donor.tri.length / 3; t++) if (isHeadTri(donor, t)) tris.push(rd(donor.tri[t * 3]), rd(donor.tri[t * 3 + 1]), rd(donor.tri[t * 3 + 2]));
+  }
+  // Atlas UVs: body page (v 1/3..1), head page (u 0..1/2, v 0..1/3), hair page (u 1/2..1, v 0..1/3).
+  for (const v of verts) {
+    const u = Math.min(1, Math.max(0, v.uv[0]));
+    const w = Math.min(1, Math.max(0, v.uv[1]));
+    v.auv = v.kind === KIND.body ? [u, 1 / 3 + (w * 2) / 3] : v.kind === KIND.head ? [u / 2, w / 3] : [0.5 + u / 2, w / 3];
+  }
+  // Feet on y = 0.
+  let minY = Infinity;
+  for (const v of verts) minY = Math.min(minY, v.p[1]);
+  for (const v of verts) v.p = [v.p[0], v.p[1] - minY, v.p[2]];
+
+  // ---------------------------------------------------------------- skeleton defs
+  const bp = (n) => {
+    const p = base.bpos['Bip01_' + n];
+    return [p[0], p[1] - minY, p[2]];
+  };
+  const up = (p, d) => [p[0], p[1] + d, p[2]];
+  const defs = {
+    root: [bp('Pelvis'), bp('Pelvis'), bp('Spine1')],
+    spineLow: [bp('Spine'), bp('Spine'), bp('Spine1')],
+    spineMid: [bp('Spine1'), bp('Spine1'), bp('Spine2')],
+    chest: [bp('Spine2'), bp('Spine2'), bp('Neck')],
+    // Upright reference for the neck (the Biped neck leans forward; CMU's is near vertical).
+    neck: [bp('Neck'), bp('Neck'), up(bp('Neck'), 0.1)],
+    head: [bp('Head'), bp('Head'), up(bp('Head'), 0.2)],
+  };
+  for (const s of ['L', 'R']) {
+    defs[`clavicle.${s}`] = [bp(`${s}_Clavicle`), bp(`${s}_Clavicle`), bp(`${s}_UpperArm`)];
+    defs[`upperarm.${s}`] = [bp(`${s}_UpperArm`), bp(`${s}_UpperArm`), bp(`${s}_Forearm`)];
+    defs[`lowerarm.${s}`] = [bp(`${s}_Forearm`), bp(`${s}_Forearm`), bp(`${s}_Hand`)];
+    defs[`wrist.${s}`] = [bp(`${s}_Hand`), bp(`${s}_Hand`), bp(`${s}_Finger2`)];
+    defs[`upperleg.${s}`] = [bp(`${s}_Thigh`), bp(`${s}_Thigh`), bp(`${s}_Calf`)];
+    defs[`lowerleg.${s}`] = [bp(`${s}_Calf`), bp(`${s}_Calf`), bp(`${s}_Foot`)];
+    defs[`foot.${s}`] = [bp(`${s}_Foot`), bp(`${s}_Foot`), bp(`${s}_Toe0`)];
+  }
+  const pivot = BONES.map((b) => defs[b][0]);
+
+  if (SKIP_TEX) return { name, verts, tris, pivot, defs, colour: null, normal: null, W: 0, H: 0, sex: spec.sex ?? 'm' };
+  const { colour, normal, W, H } = paintAtlas(name, spec, base, donor, bodyTris, nT, S, T);
+  return { name, verts, tris, pivot, defs, colour, normal, W, H, sex: spec.sex ?? 'm' };
+}
+
+/** Texture edits (skin tone, recolour, East Asian colouring) and the packed atlas of one variant. */
+function paintAtlas(name, spec, base, donor, bodyTris, nT, S, T) {
   // Textures (2048 working copies).
   const bodyC = loadImg(base.prefix.bodyC, T, T);
   const bodyN = loadImg(base.prefix.bodyN, T, T);
@@ -251,14 +379,6 @@ function buildVariant(name, spec) {
   const headN = loadImg(headSrc.prefix.headN, T, T);
   const headS = loadImg(headSrc.prefix.headS, T, T);
   const hairC = headSrc.prefix.op ? loadImg(headSrc.prefix.op, T, T / 2) : blankImg(T, T / 2, [0, 0, 0, 0]);
-  // Body opacity parts (if the base keeps hair-material pieces below the neck, e.g. lace) share the hair page:
-  // only allowed when the base is also the head source.
-  const bodyHasOpacity = bodyTris.some((t) => base.triKind[t] === KIND.hair);
-  if (bodyHasOpacity && donor) {
-    // drop them: their texture page belongs to the base
-    for (let i = bodyTris.length - 1; i >= 0; i--) if (base.triKind[bodyTris[i]] === KIND.hair) bodyTris.splice(i, 1);
-  }
-
   // ---------------------------------------------------------------- garment recolour (before skin: a recoloured garment is no longer skin-like)
   const bodyMaskAll = triMask(base, bodyTris.filter((t) => base.triKind[t] === KIND.body), bodyC);
   for (const rc of spec.recolor ?? []) {
@@ -385,65 +505,6 @@ function buildVariant(name, spec) {
     }
   }
 
-  // ---------------------------------------------------------------- geometry
-  const verts = [];
-  const tris = [];
-  const remap = (av, part) => {
-    const m = new Map();
-    return (vi) => {
-      let id = m.get(vi);
-      if (id === undefined) {
-        id = verts.length;
-        const v = av.verts[vi];
-        verts.push({ ...v, part });
-        m.set(vi, id);
-      }
-      return id;
-    };
-  };
-  const rb = remap(base, 'base');
-  for (const t of bodyTris) tris.push(rb(base.tri[t * 3]), rb(base.tri[t * 3 + 1]), rb(base.tri[t * 3 + 2]));
-  if (donor) {
-    const rd = remap(donor, 'donor');
-    for (let t = 0; t < donor.tri.length / 3; t++) if (isHeadTri(donor, t)) tris.push(rd(donor.tri[t * 3]), rd(donor.tri[t * 3 + 1]), rd(donor.tri[t * 3 + 2]));
-  }
-  // Atlas UVs: body page (v 1/3..1), head page (u 0..1/2, v 0..1/3), hair page (u 1/2..1, v 0..1/3).
-  for (const v of verts) {
-    const u = Math.min(1, Math.max(0, v.uv[0]));
-    const w = Math.min(1, Math.max(0, v.uv[1]));
-    v.auv = v.kind === KIND.body ? [u, 1 / 3 + (w * 2) / 3] : v.kind === KIND.head ? [u / 2, w / 3] : [0.5 + u / 2, w / 3];
-  }
-  // Feet on y = 0.
-  let minY = Infinity;
-  for (const v of verts) minY = Math.min(minY, v.p[1]);
-  for (const v of verts) v.p = [v.p[0], v.p[1] - minY, v.p[2]];
-
-  // ---------------------------------------------------------------- skeleton defs
-  const bp = (n) => {
-    const p = base.bpos['Bip01_' + n];
-    return [p[0], p[1] - minY, p[2]];
-  };
-  const up = (p, d) => [p[0], p[1] + d, p[2]];
-  const defs = {
-    root: [bp('Pelvis'), bp('Pelvis'), bp('Spine1')],
-    spineLow: [bp('Spine'), bp('Spine'), bp('Spine1')],
-    spineMid: [bp('Spine1'), bp('Spine1'), bp('Spine2')],
-    chest: [bp('Spine2'), bp('Spine2'), bp('Neck')],
-    // Upright reference for the neck (the Biped neck leans forward; CMU's is near vertical).
-    neck: [bp('Neck'), bp('Neck'), up(bp('Neck'), 0.1)],
-    head: [bp('Head'), bp('Head'), up(bp('Head'), 0.2)],
-  };
-  for (const s of ['L', 'R']) {
-    defs[`clavicle.${s}`] = [bp(`${s}_Clavicle`), bp(`${s}_Clavicle`), bp(`${s}_UpperArm`)];
-    defs[`upperarm.${s}`] = [bp(`${s}_UpperArm`), bp(`${s}_UpperArm`), bp(`${s}_Forearm`)];
-    defs[`lowerarm.${s}`] = [bp(`${s}_Forearm`), bp(`${s}_Forearm`), bp(`${s}_Hand`)];
-    defs[`wrist.${s}`] = [bp(`${s}_Hand`), bp(`${s}_Hand`), bp(`${s}_Finger2`)];
-    defs[`upperleg.${s}`] = [bp(`${s}_Thigh`), bp(`${s}_Thigh`), bp(`${s}_Calf`)];
-    defs[`lowerleg.${s}`] = [bp(`${s}_Calf`), bp(`${s}_Calf`), bp(`${s}_Foot`)];
-    defs[`foot.${s}`] = [bp(`${s}_Foot`), bp(`${s}_Foot`), bp(`${s}_Toe0`)];
-  }
-  const pivot = BONES.map((b) => defs[b][0]);
-
   // ---------------------------------------------------------------- atlas
   const W = S, H = (S * 3) / 2;
   const colour = new Uint8Array(W * H * 4);
@@ -483,7 +544,7 @@ function buildVariant(name, spec) {
     for (let y = 0; y < H; y++) o.set(d.subarray(y * W * 4, (y + 1) * W * 4), (H - 1 - y) * W * 4);
     return o;
   };
-  return { name, verts, tris, pivot, defs, colour: flip(colour), normal: flip(normal), W, H, sex: spec.sex ?? 'm' };
+  return { colour: flip(colour), normal: flip(normal), W, H };
 }
 
 // ------------------------------------------------------------------ LOD + encode
@@ -558,34 +619,24 @@ for (const [name, spec] of Object.entries(VARIANTS)) {
   const lods = [b.tris, lod(b.verts, b.tris, 0.3), lod(b.verts, b.tris, 0.1)];
   const hero = name === 'hero';
   const cName = `person_${name}_c.ktx2`, nName = `person_${name}_n.ktx2`;
-  writeFileSync(join(TEX, cName), encode(b.colour, b.W, b.H, true, hero));
-  writeFileSync(join(TEX, nName), encode(b.normal, b.W, b.H, false, true));
+  if (!SKIP_TEX) {
+    writeFileSync(join(TEX, cName), encode(b.colour, b.W, b.H, true, hero));
+    writeFileSync(join(TEX, nName), encode(b.normal, b.W, b.H, false, true));
+  }
   header.variants[name] = {
     verts: nv, sex: b.sex, pivots: b.pivot.flat(),
+    defs: BONES.flatMap((bn) => [...b.defs[bn][1], ...b.defs[bn][2]]),
     pos: push(pos), nrm: push(nrm), uv: push(uv), skin: push(sk), weight: push(sw),
     lods: lods.map((l) => ({ count: l.length, idx: push(new Uint16Array(l)) })),
     colour: cName, normal: nName,
   };
   const h = Math.max(...b.verts.map((v) => v.p[1]));
-  console.log(`${name}: ${nv} verts, LOD tris ${lods.map((l) => l.length / 3).join('/')}, height ${h.toFixed(2)} m, atlas ${b.W}x${b.H}`);
+  console.log(`${name}: ${nv} verts, LOD tris ${lods.map((l) => l.length / 3).join('/')}, height ${h.toFixed(2)} m${b.W ? `, atlas ${b.W}x${b.H}` : ''}`);
 }
-const CLIPS = {
-  walk: { file: '035/35_01.bvh', loop: [0.9, 1.3], inPlace: true },
-  run: { file: '035/35_17.bvh', loop: [0.55, 0.85], inPlace: true },
-  idle: { file: '077/77_02.bvh', loop: [3, 6], inPlace: false, from: 0.05, to: 0.95 },
-};
-for (const [cn, spec] of Object.entries(CLIPS)) {
-  const clip = loadClip(join(CMU, spec.file));
-  const nf = clip.frames.length;
-  const lp = findLoop(clip, spec.loop[0], spec.loop[1], Math.floor((spec.from ?? 0) * nf), Math.floor((spec.to ?? 1) * nf));
-  const c = { variants: {} };
-  for (const [name, b] of Object.entries(built)) {
-    const r = retarget(clip, lp.s, lp.p, b, 30, spec.inPlace);
-    c.frames = r.frames;
-    c.variants[name] = { data: push(r.data), speed: +r.speed.toFixed(3) };
-  }
-  header.clips[cn] = c;
-}
+const { clips, buffer: animBuf } = buildClips(CMU, built, header.fps);
+header.clips = clips;
+header.anim = 'people_anim.bin';
+writeFileSync(join(OUT, 'people_anim.bin'), animBuf);
 header.byteLength = offset;
 writeFileSync(join(OUT, 'people.bin'), Buffer.concat(chunks));
 writeFileSync(join(OUT, 'people.json'), JSON.stringify(header));

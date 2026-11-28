@@ -12,7 +12,8 @@
 import * as THREE from 'three';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 
-export type Clip = 'walk' | 'run' | 'idle';
+/** Clip names: idle, run, walk0..walkN. */
+export type Clip = string;
 
 interface VariantInfo {
   verts: number;
@@ -31,6 +32,7 @@ interface Header {
   bones: string[];
   parents: number[];
   fps: number;
+  anim: string;
   variants: Record<string, VariantInfo>;
   clips: Record<Clip, { frames: number; variants: Record<string, { data: number; speed: number }> }>;
 }
@@ -39,14 +41,17 @@ interface Header {
 export class HumanKind {
   readonly lods: THREE.BufferGeometry[] = [];
   readonly anim: THREE.DataTexture;
-  readonly clipRow: Record<Clip, number> = { walk: 0, run: 0, idle: 0 };
-  readonly clipFrames: Record<Clip, number> = { walk: 0, run: 0, idle: 0 };
+  readonly clipRow: Record<Clip, number> = {};
+  readonly clipFrames: Record<Clip, number> = {};
   /** Natural travel speed (m/s) and stride length (m per cycle) of each clip. */
-  readonly speed: Record<Clip, number> = { walk: 0, run: 0, idle: 0 };
-  readonly stride: Record<Clip, number> = { walk: 1, run: 1, idle: 1 };
+  readonly speed: Record<Clip, number> = {};
+  readonly stride: Record<Clip, number> = {};
+  readonly walks: Clip[];
   readonly sex: 'm' | 'f';
+  /** Rest position of the neck joint (head turns pivot here). */
+  readonly neckPivot: THREE.Vector3;
 
-  constructor(h: Header, bin: ArrayBuffer, readonly variant: string, readonly colour: THREE.Texture, readonly normal: THREE.Texture) {
+  constructor(h: Header, bin: ArrayBuffer, anim: ArrayBuffer, readonly variant: string, readonly colour: THREE.Texture, readonly normal: THREE.Texture) {
     const v = h.variants[variant];
     this.sex = v.sex;
     const nv = v.verts;
@@ -63,7 +68,10 @@ export class HumanKind {
       this.lods.push(g);
     }
     const nb = h.bones.length;
+    const ni = h.bones.indexOf('neck');
+    this.neckPivot = new THREE.Vector3(v.pivots[ni * 3], v.pivots[ni * 3 + 1], v.pivots[ni * 3 + 2]);
     const clips = Object.keys(h.clips) as Clip[];
+    this.walks = clips.filter((c) => c.startsWith('walk'));
     const rows = clips.reduce((s, c) => s + h.clips[c].frames, 0);
     const tex = new Float32Array(rows * nb * 3 * 4);
     const piv = v.pivots;
@@ -78,7 +86,7 @@ export class HumanKind {
       this.clipFrames[c] = cl.frames;
       this.speed[c] = cv.speed;
       this.stride[c] = Math.max(0.1, cv.speed * (cl.frames / h.fps));
-      const data = new Float32Array(bin, cv.data, cl.frames * (3 + nb * 4));
+      const data = new Float32Array(anim, cv.data, cl.frames * (3 + nb * 4));
       for (let f = 0; f < cl.frames; f++, row++) {
         const o = f * (3 + nb * 4);
         for (let b = 0; b < nb; b++) {
@@ -108,6 +116,8 @@ uniform sampler2D uAnim;
 attribute vec4 aBones;
 attribute vec4 aWeights;
 attribute vec4 aAnimI;   // frame A row, frame B row, blend, brightness
+attribute vec2 aLook;    // head yaw, pitch relative to the body (radians)
+uniform vec3 uNeckPivot;
 varying float vShade;
 mat4 kBone(float row, float bone) {
   ivec2 c = ivec2(int(bone) * 3, int(row));
@@ -116,23 +126,46 @@ mat4 kBone(float row, float bone) {
   vec4 r2 = texelFetch(uAnim, c + ivec2(2, 0), 0);
   return mat4(vec4(r0.x, r1.x, r2.x, 0.0), vec4(r0.y, r1.y, r2.y, 0.0), vec4(r0.z, r1.z, r2.z, 0.0), vec4(r0.w, r1.w, r2.w, 1.0));
 }
+mat4 kBlend(float bone) { return (1.0 - aAnimI.z) * kBone(aAnimI.x, bone) + aAnimI.z * kBone(aAnimI.y, bone); }
+// Rotation about a point: yaw about Y, then pitch about X (positive = look down).
+mat4 kTurn(vec3 p, float yaw, float pitch) {
+  float cy = cos(yaw), sy = sin(yaw), cp = cos(pitch), sp = sin(pitch);
+  mat4 R = mat4(vec4(cy, 0.0, -sy, 0.0), vec4(0.0, 1.0, 0.0, 0.0), vec4(sy, 0.0, cy, 0.0), vec4(0.0, 0.0, 0.0, 1.0))
+         * mat4(vec4(1.0, 0.0, 0.0, 0.0), vec4(0.0, cp, sp, 0.0), vec4(0.0, -sp, cp, 0.0), vec4(0.0, 0.0, 0.0, 1.0));
+  mat4 T = mat4(1.0);
+  T[3] = vec4(p, 1.0);
+  mat4 Ti = mat4(1.0);
+  Ti[3] = vec4(-p, 1.0);
+  return T * R * Ti;
+}
 mat4 kSkin() {
   mat4 m = mat4(0.0);
+  bool look = abs(aLook.x) + abs(aLook.y) > 0.002;
+  vec3 np = look ? (kBlend(4.0) * vec4(uNeckPivot, 1.0)).xyz : vec3(0.0);
   for (int i = 0; i < 4; i++) {
     float w = aWeights[i];
     if (w <= 0.0) continue;
-    m += w * ((1.0 - aAnimI.z) * kBone(aAnimI.x, aBones[i]) + aAnimI.z * kBone(aAnimI.y, aBones[i]));
+    float b = aBones[i];
+    mat4 bm = kBlend(b);
+    // Head (5) turns fully, neck (4) by part of it, about the animated neck joint.
+    if (look && b > 3.5 && b < 5.5) {
+      float k = b > 4.5 ? 1.0 : 0.45;
+      bm = kTurn(np, aLook.x * k, aLook.y * k) * bm;
+    }
+    m += w * bm;
   }
   return m;
 }
 `;
+
+const lookUniforms = (kind: HumanKind) => ({ uAnim: { value: kind.anim }, uNeckPivot: { value: kind.neckPivot } });
 
 function skinnedMaterial(kind: HumanKind): THREE.MeshStandardMaterial {
   const mat = new THREE.MeshStandardMaterial({ map: kind.colour, normalMap: kind.normal, roughness: 1, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide });
   mat.normalScale.set(1, 1);
   mat.defines = { USE_PACKED_NORMALMAP: '' };
   mat.onBeforeCompile = (s) => {
-    s.uniforms.uAnim = { value: kind.anim };
+    Object.assign(s.uniforms, lookUniforms(kind));
     s.vertexShader = s.vertexShader
       .replace('#include <common>', '#include <common>\n' + SKIN_VS_PARS)
       .replace('#include <beginnormal_vertex>', 'mat4 kM = kSkin();\nvShade = aAnimI.w;\nvec3 objectNormal = normalize(mat3(kM) * normal.xyz);\n#ifdef USE_TANGENT\nvec3 objectTangent = vec3(tangent.xyz);\n#endif')
@@ -143,19 +176,19 @@ function skinnedMaterial(kind: HumanKind): THREE.MeshStandardMaterial {
       // Specular map (normal atlas blue) -> roughness.
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = mix(0.9, 0.38, texture2D(normalMap, vNormalMapUv).b);');
   };
-  mat.customProgramCacheKey = () => 'kta-person-1';
+  mat.customProgramCacheKey = () => 'kta-person-2';
   return mat;
 }
 
 function skinnedDepth(kind: HumanKind): THREE.MeshDepthMaterial {
   const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: kind.colour, alphaTest: 0.45 });
   mat.onBeforeCompile = (s) => {
-    s.uniforms.uAnim = { value: kind.anim };
+    Object.assign(s.uniforms, lookUniforms(kind));
     s.vertexShader = s.vertexShader
       .replace('#include <common>', '#include <common>\n' + SKIN_VS_PARS)
       .replace('#include <begin_vertex>', 'mat4 kM = kSkin();\nvShade = aAnimI.w;\nvec3 transformed = (kM * vec4(position, 1.0)).xyz;');
   };
-  mat.customProgramCacheKey = () => 'kta-person-depth-1';
+  mat.customProgramCacheKey = () => 'kta-person-depth-2';
   return mat;
 }
 
@@ -163,7 +196,10 @@ function skinnedDepth(kind: HumanKind): THREE.MeshDepthMaterial {
 export class HumanLayer {
   readonly meshes: THREE.InstancedMesh[] = [];
   private anim: THREE.InstancedBufferAttribute[] = [];
+  private look: THREE.InstancedBufferAttribute[] = [];
   private n: number[];
+  private qr = new THREE.Quaternion();
+  private fwd = new THREE.Vector3(0, 0, 1);
   private m = new THREE.Matrix4();
   private q = new THREE.Quaternion();
   private v = new THREE.Vector3();
@@ -177,6 +213,9 @@ export class HumanLayer {
       const geo = g.clone();
       const anim = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4).setUsage(THREE.DynamicDrawUsage);
       geo.setAttribute('aAnimI', anim);
+      const look = new THREE.InstancedBufferAttribute(new Float32Array(cap * 2), 2).setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('aLook', look);
+      this.look.push(look);
       const mesh = new THREE.InstancedMesh(geo, mat, cap);
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.count = 0;
@@ -196,11 +235,13 @@ export class HumanLayer {
   }
 
   /** Add one person. rowA/rowB are animation texture rows, blend between them; scale = body size, shade = colour multiplier. */
-  add(lod: number, x: number, y: number, z: number, yaw: number, rowA: number, rowB: number, blend: number, scale = 1, shade = 1) {
+  add(lod: number, x: number, y: number, z: number, yaw: number, rowA: number, rowB: number, blend: number, scale = 1, shade = 1, lookYaw = 0, lookPitch = 0, lean = 0) {
     const i = this.n[lod];
     if (i >= this.cap) return;
     this.n[lod] = i + 1;
     this.q.setFromAxisAngle(this.up, yaw);
+    if (lean) this.q.multiply(this.qr.setFromAxisAngle(this.fwd, lean));
+    this.look[lod].setXY(i, lookYaw, lookPitch);
     this.v.set(x, y, z);
     this.s.set(scale, scale, scale);
     this.m.compose(this.v, this.q, this.s);
@@ -214,6 +255,7 @@ export class HumanLayer {
       mesh.visible = this.n[l] > 0;
       mesh.instanceMatrix.needsUpdate = true;
       this.anim[l].needsUpdate = true;
+      this.look[l].needsUpdate = true;
     });
   }
 
@@ -233,7 +275,8 @@ export interface PeopleKinds {
 
 export async function loadHumans(renderer: THREE.WebGLRenderer): Promise<PeopleKinds> {
   const ktx2 = new KTX2Loader().setTranscoderPath('basis/').detectSupport(renderer);
-  const [h, bin] = await Promise.all([fetch('models/people.json').then((r) => r.json() as Promise<Header>), fetch('models/people.bin').then((r) => r.arrayBuffer())]);
+  const h = await fetch('models/people.json').then((r) => r.json() as Promise<Header>);
+  const [bin, anim] = await Promise.all([fetch('models/people.bin').then((r) => r.arrayBuffer()), fetch('models/' + h.anim).then((r) => r.arrayBuffer())]);
   const load = async (file: string) => {
     const t = await ktx2.loadAsync('textures/' + file);
     t.anisotropy = 4;
@@ -243,7 +286,7 @@ export async function loadHumans(renderer: THREE.WebGLRenderer): Promise<PeopleK
   const names = Object.keys(h.variants);
   const tex = await Promise.all(names.flatMap((n) => [load(h.variants[n].colour), load(h.variants[n].normal)]));
   ktx2.dispose();
-  const kinds = names.map((n, i) => new HumanKind(h, bin, n, tex[i * 2], tex[i * 2 + 1]));
+  const kinds = names.map((n, i) => new HumanKind(h, bin, anim, n, tex[i * 2], tex[i * 2 + 1]));
   const hero = kinds.find((k) => k.variant === 'hero') ?? kinds[0];
   return { hero, crowd: kinds.filter((k) => k !== hero) };
 }
@@ -254,19 +297,34 @@ const smooth = (a: number, b: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
+const wrap = (a: number) => {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+};
+const ease = (cur: number, want: number, rate: number, dt: number) => cur + (want - cur) * Math.min(1, rate * dt);
+
 /** The protagonist plus the crowd (pedestrians from the Rust core), with distance LODs. */
 export class People {
   readonly group = new THREE.Group();
   private hero: HumanLayer;
   private layers: HumanLayer[];
   private kindOf: Uint8Array;
+  private walkOf: string[];
   private scaleOf: Float32Array;
   private shadeOf: Float32Array;
+  private lookY: Float32Array;
+  private lookP: Float32Array;
   private heroU = 0;
   private idleU = 0;
+  private heroLookY = 0;
+  private heroLookP = 0;
+  private lastYaw = 0;
+  private lean = 0;
   private frustum = new THREE.Frustum();
   private pm = new THREE.Matrix4();
   private sphere = new THREE.Sphere();
+  private camDir = new THREE.Vector3();
   visible = 0;
 
   constructor(kinds: PeopleKinds, readonly count: number) {
@@ -274,14 +332,18 @@ export class People {
     this.layers = kinds.crowd.map((k) => new HumanLayer(k, count));
     for (const l of [this.hero, ...this.layers]) for (const m of l.meshes) this.group.add(m);
     this.kindOf = new Uint8Array(count);
+    this.walkOf = new Array(count);
     this.scaleOf = new Float32Array(count);
     this.shadeOf = new Float32Array(count);
+    this.lookY = new Float32Array(count);
+    this.lookP = new Float32Array(count);
     for (let i = 0; i < count; i++) {
       const h = (k: number) => (Math.imul(i + 1 + k * 7919, 2654435761) >>> 0) / 4294967296;
       this.kindOf[i] = Math.floor(h(0) * this.layers.length) % this.layers.length;
+      const kind = kinds.crowd[this.kindOf[i]];
+      this.walkOf[i] = kind.walks[Math.floor(h(3) * kind.walks.length) % kind.walks.length];
       // Korean adults are a little shorter than the source avatars (1.80 m men, 1.74 m women).
-      const female = kinds.crowd[this.kindOf[i]].sex === 'f';
-      this.scaleOf[i] = (female ? 0.93 : 0.95) * (0.96 + 0.08 * h(1));
+      this.scaleOf[i] = (kind.sex === 'f' ? 0.93 : 0.95) * (0.96 + 0.08 * h(1));
       this.shadeOf[i] = 0.9 + 0.2 * h(2);
     }
   }
@@ -289,24 +351,38 @@ export class People {
   update(dt: number, px: number, pz: number, yaw: number, speed: number, crowd: Float32Array, camera: THREE.Camera) {
     // Protagonist: idle / walk / run blended by speed, gait cycles kept in step.
     const k = this.hero.kind;
+    const walk = k.walks[0];
     const wMove = smooth(0.08, 0.6, speed);
     const wRun = smooth(2.2, 4.4, speed);
-    const stride = k.stride.walk + (k.stride.run - k.stride.walk) * wRun;
+    const stride = k.stride[walk] + (k.stride.run - k.stride[walk]) * wRun;
     this.heroU = (this.heroU + (speed * dt) / stride) % 1;
     this.idleU = (this.idleU + dt / (k.clipFrames.idle / 30)) % 1;
     let a: number, b: number, bl: number;
     if (wRun > 0.999) [a, b, bl] = this.hero.rows('run', this.heroU);
     else if (wRun > 0.001) {
-      [a] = this.hero.rows('walk', this.heroU);
+      [a] = this.hero.rows(walk, this.heroU);
       [b] = this.hero.rows('run', this.heroU);
       bl = wRun;
     } else if (wMove < 0.999) {
       [a] = this.hero.rows('idle', this.idleU);
-      [b] = this.hero.rows('walk', this.heroU);
+      [b] = this.hero.rows(walk, this.heroU);
       bl = wMove;
-    } else [a, b, bl] = this.hero.rows('walk', this.heroU);
+    } else [a, b, bl] = this.hero.rows(walk, this.heroU);
+    // Lean into turns (centripetal), stronger when running.
+    const yawRate = dt > 0 ? wrap(yaw - this.lastYaw) / dt : 0;
+    this.lastYaw = yaw;
+    this.lean = ease(this.lean, THREE.MathUtils.clamp(-yawRate * speed * 0.03, -0.22, 0.22), 6, dt);
+    // Gaze follows the camera's view direction (looking where the player looks), within neck limits.
+    camera.getWorldDirection(this.camDir);
+    const camYaw = Math.atan2(this.camDir.x, this.camDir.z);
+    let rel = wrap(camYaw - yaw);
+    const facingCam = Math.abs(rel) > 2.3; // camera looks at his face: keep the head straight
+    rel = facingCam ? 0 : THREE.MathUtils.clamp(rel, -1.2, 1.2) * 0.75;
+    const pitch = facingCam ? 0 : THREE.MathUtils.clamp(Math.asin(THREE.MathUtils.clamp(-this.camDir.y, -1, 1)) * 0.5 + 0.05, -0.35, 0.4);
+    this.heroLookY = ease(this.heroLookY, rel * (1 - 0.5 * wRun), 5, dt);
+    this.heroLookP = ease(this.heroLookP, pitch * (1 - 0.6 * wMove), 5, dt);
     this.hero.begin();
-    this.hero.add(0, px, 0, pz, yaw, a, b, bl);
+    this.hero.add(0, px, 0, pz, yaw, a, b, bl, 1, 1, this.heroLookY, this.heroLookP, this.lean);
     this.hero.end();
 
     // Crowd.
@@ -320,6 +396,20 @@ export class People {
       const o = i * 4;
       const x = crowd[o];
       const z = crowd[o + 1];
+      const pyaw = crowd[o + 2];
+      // Glance at the protagonist when passing close by (within neck limits, ahead or beside).
+      const dxp = px - x, dzp = pz - z;
+      const dp = Math.hypot(dxp, dzp);
+      let wantY = 0, wantP = 0;
+      if (dp < 5.5 && dp > 0.4) {
+        const relp = wrap(Math.atan2(dxp, dzp) - pyaw);
+        if (Math.abs(relp) < 1.9) {
+          wantY = THREE.MathUtils.clamp(relp, -1.1, 1.1);
+          wantP = 0.08;
+        }
+      }
+      this.lookY[i] = ease(this.lookY[i], wantY, 3, dt);
+      this.lookP[i] = ease(this.lookP[i], wantP, 3, dt);
       this.sphere.center.set(x, 0.9, z);
       this.sphere.radius = 1.1;
       if (!this.frustum.intersectsSphere(this.sphere)) continue;
@@ -327,9 +417,10 @@ export class People {
       if (d > 160) continue;
       const lod = d < 14 ? 0 : d < 40 ? 1 : 2;
       const layer = this.layers[this.kindOf[i]];
-      const u = crowd[o + 3] / (1.9 * layer.kind.stride.walk);
-      const [ra, rb, f] = layer.rows('walk', u);
-      layer.add(lod, x, 0, z, crowd[o + 2], ra, rb, f, this.scaleOf[i], this.shadeOf[i]);
+      const wc = this.walkOf[i];
+      const u = crowd[o + 3] / (1.9 * layer.kind.stride[wc]);
+      const [ra, rb, f] = layer.rows(wc, u);
+      layer.add(lod, x, 0, z, pyaw, ra, rb, f, this.scaleOf[i], this.shadeOf[i], lod < 2 ? this.lookY[i] : 0, lod < 2 ? this.lookP[i] : 0);
       vis++;
     }
     for (const l of this.layers) l.end();

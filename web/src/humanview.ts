@@ -33,6 +33,7 @@ const list = only ? all.filter((k) => only.includes(k.variant)) : all;
 const t = Number(qs.get('t') ?? 0.15);
 const lod = Number(qs.get('lod') ?? 0);
 const clip = (qs.get('clip') ?? 'idle') as Clip;
+const lookYaw = Number(qs.get('look') ?? 0);
 const yawView = Number(qs.get('yaw') ?? 0.3);
 const gap = Number(qs.get('gap') ?? 0.95);
 list.forEach((k, i) => {
@@ -40,7 +41,7 @@ list.forEach((k, i) => {
   layer.meshes.forEach((m) => scene.add(m));
   layer.begin();
   const [a, b, bl] = layer.rows(clip, t);
-  layer.add(lod, (i - (list.length - 1) / 2) * gap, 0, 0, yawView, a, b, bl);
+  layer.add(lod, (i - (list.length - 1) / 2) * gap, 0, 0, yawView, a, b, bl, 1, 1, lookYaw, 0);
   layer.end();
 });
 const cam = new THREE.PerspectiveCamera(30, W / H, 0.1, 100);

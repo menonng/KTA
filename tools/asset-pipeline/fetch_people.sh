@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Source data for people/build_people.mjs (sparse clones, only the needed files):
 #   Microsoft Rocketbox avatars (MIT): FBX + textures of the avatars listed below.
-#   CMU motion capture in BVH (free for any use): walk 35_01, run 35_17, standing 77_02.
+#   CMU motion capture in BVH (free for any use): walks 35_01 07_01 08_01 02_01, run 35_17.
 # Usage: ./fetch_people.sh <work dir>
 #   node people/extract_fbx.mjs <work>/extract.json <work>/rb/Assets/Avatars/*/*/Export/<name>.fbx ...
 #   CMU=<work>/cmu/data node people/build_people.mjs <work>/extract.json <work>/rb ../../web/public/models ../../web/public/textures
@@ -21,6 +21,6 @@ fi
 if [ ! -d cmu ]; then
   git clone -q --depth 1 --filter=blob:none --no-checkout https://github.com/una-dinosauria/cmu-mocap cmu
   (cd cmu && git sparse-checkout init --no-cone && \
-    git sparse-checkout set /data/035/35_01.bvh /data/035/35_17.bvh /data/077/77_02.bvh && git checkout -q HEAD)
+    git sparse-checkout set /data/035/35_01.bvh /data/035/35_17.bvh /data/007/07_01.bvh /data/008/08_01.bvh /data/002/02_01.bvh && git checkout -q HEAD)
 fi
 echo "ok: $W/rb $W/cmu/data"

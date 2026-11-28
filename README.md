@@ -35,6 +35,7 @@ cd web && npm ci && cd ..
 # (cd tools/asset-pipeline && npm ci && python3 fetch_models.py work && node build_models.mjs work ../../web/public/models && node build_trees.mjs work ../../web/public/textures)
 # 사람 모델을 다시 만들 때만(Rocketbox 원본 약 1.2GB):
 # (cd tools/asset-pipeline && ./fetch_people.sh work && node people/extract_fbx.mjs work/extract.json $(ls work/rb/Assets/Avatars/*/*/Export/*.fbx) && CMU=work/cmu/data node people/build_people.mjs work/extract.json work/rb ../../web/public/models ../../web/public/textures)
+# 동작만 다시 만들 때(수 초): (cd tools/asset-pipeline && CMU=work/cmu/data node people/build_motion.mjs ../../web/public/models)
 cd web && npm run preview   # http://localhost:4173
 ```
 
