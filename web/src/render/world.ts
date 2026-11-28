@@ -348,24 +348,82 @@ const FACADE_NORMAL = /* glsl */ `
 const ROAD = /* glsl */ `
 float rA = vRoad.x;
 float rX = vRoad.y;
-float rOne = step(15.5, vRoad.z);
-float rK = mod(vRoad.z, 16.0);
+float rZ = vRoad.z;
+// kind + 16 one-way + 32 Hongdae Red Road edges (어울마당로).
+float rRed = step(31.5, rZ);
+rZ -= 32.0 * rRed;
+float rOne = step(15.5, rZ);
+float rK = mod(rZ, 16.0);
 float rHw = vRoad.w;
 float gl = 0.0;
 vec2 guv = vec2(rA, rX) / 4.0;
-if (rK > 8.5) { gl = 1.0; guv = vec2(rA, rX) / 2.0; }
-else if (rK > 5.5 && rK < 6.5) { gl = 2.0; guv = vec2(rA, rX) / 2.0; }
+if (rK > 5.5 && rK < 6.5) { gl = 2.0; guv = vec2(rA, rX) / 2.0; }
 else if (rK > 6.5 && rK < 7.5) { gl = 1.0; guv = vec2(rA, rX) / 2.0; }
 vec3 rc;
-vec3 gNt;
+vec3 gNt = vec3(0.0, 0.0, 1.0);
 vec2 rp = vec2(rA, rX);
-if (gl < 0.5) {
+bool vertical = abs(vGN.y) < 0.5;
+if (rK > 8.5 && rK < 9.5) {
+  // Pavement (보도): 300 x 300 mm grey concrete blocks in stack bond along the
+  // kerb, sand joints, a few newer replacement blocks; 200 mm granite kerb top.
+  guv = rp;
+  vec2 bp = rp / 0.3;
+  vec2 bi = floor(bp);
+  vec2 bf = fract(bp) - 0.5;
+  vec2 ed = 0.5 - abs(bf);
+  float e = min(ed.x, ed.y);
+  float h1 = kH2(bi + 17.0);
+  float h2 = kH2(bi * 1.37 + 5.0);
+  vec3 blk = vec3(0.44, 0.43, 0.41) * (0.9 + 0.15 * h1);
+  if (h2 < 0.05) blk *= vec3(0.8, 0.82, 0.86);
+  else if (h2 > 0.975) blk *= vec3(1.07, 1.05, 1.0);
+  float gr = kN(rp * 23.0) * 0.6 + kN(rp * 61.0) * 0.4;
+  blk *= 0.9 + 0.16 * gr;
+  blk *= (0.86 + 0.18 * kN(rp * 0.09 + 2.0)) * (0.95 + 0.08 * kN(rp * 0.7 + 8.0));
+  float joint = 1.0 - smoothstep(0.01, 0.028, e);
+  rc = mix(blk, blk * vec3(0.42, 0.41, 0.4), joint);
+  vec2 edir = ed.x < ed.y ? vec2(sign(bf.x), 0.0) : vec2(0.0, sign(bf.y));
+  gNt = normalize(vec3(edir * (1.0 - smoothstep(0.0, 0.045, e)) * 0.7, 1.0));
+  if (rX < 0.2) {
+    // Granite kerb top (화강석 경계석), 1 m stones.
+    float sp = kH2(floor(rp * 260.0) + 3.0);
+    vec3 gran = vec3(0.6, 0.6, 0.59) * (0.9 + 0.12 * kN(rp * 3.0));
+    gran = mix(gran, vec3(0.3), step(0.86, sp) * 0.8);
+    gran = mix(gran, vec3(0.82), step(sp, 0.08) * 0.6);
+    float kj = 1.0 - smoothstep(0.0, 0.012, min(fract(rA), 1.0 - fract(rA)));
+    rc = mix(gran, gran * 0.5, max(kj, 1.0 - smoothstep(0.185, 0.2, 0.2 - rX + 0.185)));
+    gNt = normalize(vec3(0.0, (1.0 - smoothstep(0.0, 0.025, rX)) * -0.8, 1.0));
+  }
+  rc *= mix(0.82, 1.0, smoothstep(0.0, 0.5, rHw - rX));
+  vec4 lit = kLitter(vGP.xz, 0.1 * smoothstep(0.35, 0.75, kN(vGP.xz * 0.08 + 4.0)) + 0.012);
+  rc = mix(rc, lit.rgb, lit.a);
+  gNt = normalize(mix(gNt, vec3(0.0, 0.0, 1.0), lit.a));
+} else if (rK > 10.5 && rK < 11.5) {
+  // Kerb face: sawn granite, joints every metre, road grime at the foot.
+  guv = vec2(rA, rX);
+  float sp = kH2(floor(vec2(rA, rX) * 260.0) + 9.0);
+  vec3 gran = vec3(0.56, 0.56, 0.55) * (0.88 + 0.14 * kN(vec2(rA * 3.0, rX * 9.0)));
+  gran = mix(gran, vec3(0.28), step(0.86, sp) * 0.8);
+  gran = mix(gran, vec3(0.8), step(sp, 0.08) * 0.6);
+  float kj = 1.0 - smoothstep(0.0, 0.01, min(fract(rA), 1.0 - fract(rA)));
+  rc = mix(gran, gran * 0.45, kj) * mix(0.55, 1.0, smoothstep(0.06, 0.13, rX));
+} else if (rK > 11.5 && rK < 12.5) {
+  // Back edge of a raised pavement.
+  guv = vec2(rA, rX);
+  rc = vec3(0.42, 0.41, 0.4) * (0.85 + 0.2 * kN(vec2(rA * 2.0, rX * 8.0)));
+} else if (gl < 0.5) {
   // Asphalt: stochastic tiling, cracks kept only in a few places, broad tonal variation.
   kHex(0.0, guv, 1.0, rc, gNt);
   vec3 mean = textureLod(tGroundA, vec3(0.5, 0.5, 0.0), 12.0).rgb;
   float keep = smoothstep(0.66, 0.74, kN(rp * 0.045 + 31.0));
   kCracks(rc, gNt, mean, keep);
   rc *= vec3(1.04, 1.0, 0.93) * 0.95 * (0.84 + 0.22 * kN(rp * 0.05 + 13.0)) * (0.94 + 0.12 * kN(rp * 0.31 + 5.0));
+  if (rK > 9.5 && rK < 10.5) {
+    // Median bus lane (중앙버스전용차로): red asphalt, worn in the wheel paths.
+    float l = dot(rc, vec3(0.333));
+    float tr = exp(-pow((fract((rX + rHw) / 3.5) - 0.3) / 0.08, 2.0)) + exp(-pow((fract((rX + rHw) / 3.5) - 0.75) / 0.08, 2.0));
+    rc = mix(vec3(0.42, 0.16, 0.13) * (0.75 + 0.6 * l), rc, 0.18 + 0.25 * tr);
+  }
   // Wheel paths (polished, slightly lighter) and an oily band between them, per 3.25 m lane.
   float lanePos = fract((rOne < 0.5 ? abs(rX) : rX + rHw) / 3.25);
   float track = exp(-pow((lanePos - 0.27) / 0.07, 2.0)) + exp(-pow((lanePos - 0.73) / 0.07, 2.0));
@@ -374,7 +432,7 @@ if (gl < 0.5) {
   // Utility-cut repairs: darker, smoother rectangles with a sealed seam.
   vec2 pc = floor(vec2(rA / 13.0, rX / 3.25));
   float ph = kH2(pc + 41.0);
-  if (ph < 0.14) {
+  if (ph < 0.14 && (rK < 9.5 || rK > 10.5)) {
     vec2 pf = vec2(fract(rA / 13.0) * 13.0, fract(rX / 3.25) * 3.25);
     vec2 lo = vec2(1.0 + 5.0 * kH2(pc + 2.0), 0.3 + 0.8 * kH2(pc + 3.0));
     vec2 hi = lo + vec2(2.0 + 5.0 * kH2(pc + 4.0), 0.8 + 1.4 * kH2(pc + 5.0));
@@ -385,23 +443,30 @@ if (gl < 0.5) {
     rc *= 1.0 - 0.45 * seam;
     gNt = normalize(mix(gNt, vec3(0.0, 0.0, 1.0), inside * 0.5));
   }
+  if (rRed > 0.5) {
+    // Hongdae Red Road: red anti-slip surfacing along both edges (마포구 2023).
+    float band = smoothstep(1.75, 1.6, rHw - abs(rX));
+    float grit = 0.85 + 0.25 * kN(rp * 19.0);
+    rc = mix(rc, vec3(0.5, 0.12, 0.1) * grit * (0.9 + 0.15 * kN(rp * 0.4)), band * 0.92);
+  }
 } else {
   rc = texture(tGroundA, vec3(guv, gl)).rgb * 0.85;
   gNt = texture(tGroundN, vec3(guv, gl)).xyz * 2.0 - 1.0;
-  // Pavements: weathering, grime along the kerb, litter.
   rc *= (0.86 + 0.2 * kN(rp * 0.07 + 2.0)) * (0.93 + 0.12 * kN(rp * 0.6 + 8.0));
-  float kerbD = max(rHw - abs(rX), 0.0);
-  rc *= mix(0.8, 1.0, smoothstep(0.0, 0.6, kerbD));
   vec4 lit = kLitter(vGP.xz, 0.11 * smoothstep(0.35, 0.75, kN(vGP.xz * 0.08 + 4.0)) + 0.012);
   rc = mix(rc, lit.rgb, lit.a);
   gNt = normalize(mix(gNt, vec3(0.0, 0.0, 1.0), lit.a));
+  if (rRed > 0.5) {
+    float band = smoothstep(1.75, 1.6, rHw - abs(rX));
+    rc = mix(rc, vec3(0.5, 0.12, 0.1) * (0.85 + 0.25 * kN(rp * 19.0)), band * 0.9);
+  }
 }
-if (rK < 3.5 || rK > 7.5) {
+float wear = 0.75 + 0.25 * kN(vec2(rA * 0.8, rX * 3.0));
+vec3 yel = vec3(0.8, 0.6, 0.12);
+vec3 wht = vec3(0.78, 0.78, 0.76);
+if (rK < 3.5 || (rK > 7.5 && rK < 8.5)) {
   float ax = abs(rX);
   float edge = rHw - ax;
-  vec3 yel = vec3(0.8, 0.6, 0.12);
-  vec3 wht = vec3(0.78, 0.78, 0.76);
-  float wear = 0.75 + 0.25 * kN(vec2(rA * 0.8, rX * 3.0));
   if (rOne < 0.5) {
     if (rK < 2.5 && ax > 0.08 && ax < 0.26) rc = mix(rc, yel, wear);
     if (rK >= 2.5 && ax < 0.08 && fract(rA / 8.0) < 0.5) rc = mix(rc, yel, wear);
@@ -416,9 +481,13 @@ if (rK < 3.5 || rK > 7.5) {
     if (rHw - rX > 0.15 && rHw - rX < 0.3) rc = mix(rc, yel, wear);
   }
   if (edge > 0.3 && edge < 0.45) rc = mix(rc, wht, wear);
+} else if (rK > 9.5 && rK < 10.5) {
+  // Bus-only lane edges: blue solid lines (노면표시 504, 청색).
+  float edge = rHw - abs(rX);
+  if (edge > 0.2 && edge < 0.4) rc = mix(rc, vec3(0.1, 0.26, 0.6), wear);
 }
 diffuseColor.rgb = rc;
-snowMask = mix(0.3, 1.0, smoothstep(rHw - 1.4, rHw - 0.2, abs(rX)));
+snowMask = vertical ? 0.0 : (rK > 8.5 && rK < 12.5 ? 1.0 : mix(0.3, 1.0, smoothstep(rHw - 1.4, rHw - 0.2, abs(rX))));
 `;
 
 // Rain: darker, glossy ground with puddles. Snow: patchy cover, thinner on
@@ -516,10 +585,10 @@ export function createRoadMaterial(tex: TextureSet) {
   const base = groundShader(tex, ROAD, 'attribute vec4 aRoad;\nvarying vec4 vRoad;');
   m.onBeforeCompile = (s) => {
     base(s);
-    s.vertexShader = s.vertexShader.replace('vGN = vec3(0.0, 1.0, 0.0);', 'vGN = vec3(0.0, 1.0, 0.0);\nvRoad = aRoad;');
+    s.vertexShader = s.vertexShader.replace('vGN = vec3(0.0, 1.0, 0.0);', 'vGN = normalize(normal);\nvRoad = aRoad;');
     s.fragmentShader = s.fragmentShader.replace('varying vec3 vGN;', 'varying vec3 vGN;\nvarying vec4 vRoad;');
   };
-  m.customProgramCacheKey = () => 'kta-road-tex-4';
+  m.customProgramCacheKey = () => 'kta-road-tex-5';
   return m;
 }
 
@@ -583,8 +652,7 @@ export function buildWorld(game: Game, memory: WebAssembly.Memory, scene: THREE.
   const ratt = new Float32Array(buf, r[2], r[3]).slice();
   const ridx = new Uint32Array(buf, r[4], r[5]).slice();
   rg.setAttribute('position', new THREE.BufferAttribute(rpos, 3));
-  const up = new Int8Array((rpos.length / 3) * 3);
-  for (let i = 1; i < up.length; i += 3) up[i] = 127;
+  const up = new Int8Array(buf, r[6], r[7]).slice();
   rg.setAttribute('normal', new THREE.BufferAttribute(up, 3, true).onUpload(disposeArray));
   rg.setAttribute('aRoad', new THREE.BufferAttribute(ratt, 4).onUpload(disposeArray));
   rg.setIndex(new THREE.BufferAttribute(ridx, 1).onUpload(disposeArray));

@@ -35,6 +35,10 @@ export class Game {
     entrances(): Float32Array;
     free_meshes(): void;
     /**
+     * Walking-surface height (raised pavements, kerb ramps, bus platforms).
+     */
+    ground_y(x: number, z: number): number;
+    /**
      * Street lamp light pools: x, z.
      */
     lamps(): Float32Array;
@@ -48,9 +52,17 @@ export class Game {
     minimap_roads(): Float32Array;
     constructor(data: Uint8Array | number[], seed: number, crowd: number);
     /**
+     * Point features (signals, crossings): x, z, kind.
+     */
+    nodes(): Float32Array;
+    /**
      * Parked vehicles: x, z, yaw, type, paint seed per car.
      */
     parked_cars(): Float32Array;
+    /**
+     * Pointer to one float per pedestrian: eased ground height under the feet.
+     */
+    ped_y_ptr(): number;
     /**
      * Pointer to 6 floats: x, y, z, yaw, speed, phase.
      */
@@ -65,7 +77,7 @@ export class Game {
     prop_cells(): Int32Array;
     prop_count(): number;
     /**
-     * [pos_ptr, pos_len, attr_ptr, attr_len, idx_ptr, idx_len]
+     * [pos_ptr, pos_len, attr_ptr, attr_len, idx_ptr, idx_len, nrm_ptr, nrm_len]
      */
     roads_desc(): Uint32Array;
     /**
@@ -82,6 +94,15 @@ export class Game {
      */
     spill_desc(): Uint32Array;
     step(dt: number, bits: number, fx: number, fz: number): void;
+    stop_name(i: number): string;
+    /**
+     * Bus stops: x, z, yaw, kind per stop (kta_core::data::stop).
+     */
+    stops(): Float32Array;
+    /**
+     * Tactile paving: x, y, z, yaw, size x, size z, kind (0 dots, 1 lines).
+     */
+    tactile(): Float32Array;
     /**
      * Wire line segments: x0, y0, z0, x1, y1, z1, ...
      */
@@ -104,11 +125,14 @@ export interface InitOutput {
     readonly game_crowd_ptr: (a: number) => number;
     readonly game_entrances: (a: number) => [number, number];
     readonly game_free_meshes: (a: number) => void;
+    readonly game_ground_y: (a: number, b: number, c: number) => number;
     readonly game_lamps: (a: number) => [number, number];
     readonly game_minimap_buildings: (a: number) => [number, number];
     readonly game_minimap_roads: (a: number) => [number, number];
     readonly game_new: (a: number, b: number, c: number, d: number) => [number, number, number];
+    readonly game_nodes: (a: number) => [number, number];
     readonly game_parked_cars: (a: number) => [number, number];
+    readonly game_ped_y_ptr: (a: number) => number;
     readonly game_player_ptr: (a: number) => number;
     readonly game_prop_cell_instances: (a: number, b: number, c: number) => [number, number];
     readonly game_prop_cells: (a: number) => [number, number];
@@ -119,6 +143,9 @@ export interface InitOutput {
     readonly game_spawn: (a: number, b: number, c: number) => void;
     readonly game_spill_desc: (a: number) => [number, number];
     readonly game_step: (a: number, b: number, c: number, d: number, e: number) => void;
+    readonly game_stop_name: (a: number, b: number) => [number, number];
+    readonly game_stops: (a: number) => [number, number];
+    readonly game_tactile: (a: number) => [number, number];
     readonly game_wires: (a: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_free: (a: number, b: number, c: number) => void;

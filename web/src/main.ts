@@ -188,8 +188,10 @@ async function boot() {
 
   const playerView = () => new Float32Array(memory.buffer, game.player_ptr(), 6);
   const crowdView = () => new Float32Array(memory.buffer, game.crowd_ptr(), game.crowd_count() * 4);
+  const pedYView = () => new Float32Array(memory.buffer, game.ped_y_ptr(), game.crowd_count());
   let pv = playerView();
   let cv = crowdView();
+  let yv = pedYView();
 
   const camTarget = new THREE.Vector3();
   let camDist = 5.2;
@@ -211,6 +213,12 @@ async function boot() {
       props.update(x, z, 0, true);
     },
     setView: (yaw: number, pitch: number, dist: number) => Object.assign(input, { yaw, pitch, dist }),
+    /** Bus stops: [x, z, yaw, kind, name] (kind: 0 pole, 1 shelter, 2 smart, 3 median, 4 median smart). */
+    stops: () => {
+      const a = game.stops();
+      return Array.from({ length: a.length / 4 }, (_, i) => [a[i * 4], a[i * 4 + 1], a[i * 4 + 2], a[i * 4 + 3], game.stop_name(i)]);
+    },
+    groundY: (x: number, z: number) => game.ground_y(x, z),
     stats: () => collectStats(),
     debugBuffers: () => {
       const seen = new Set<unknown>();
@@ -344,13 +352,15 @@ async function boot() {
     input.update();
     const [fx, fz] = input.forward();
     game.step(dt, input.bits, fx, fz);
-    if (pv.buffer !== memory.buffer) {
+    if (pv.buffer !== memory.buffer || yv.byteOffset !== game.ped_y_ptr()) {
       pv = playerView();
       cv = crowdView();
+      yv = pedYView();
     }
     const px = pv[0];
+    const py = pv[1];
     const pz = pv[2];
-    people.update(dt, px, pz, pv[3], pv[4], cv, camera);
+    people.update(dt, px, py, pz, pv[3], pv[4], cv, yv, camera);
 
     hours = (hours + dt / 60) % 24; // 1 real second = 1 game minute
     env.setTime(hours);
@@ -363,9 +373,10 @@ async function boot() {
 
     props.update(px, pz, dt);
     models.update(px, pz);
+    models.setNight(env.night.value);
     if (!noTraffic && !trafficFrozen) traffic.update(dt, px, pz, cv);
     carLayer.update(px, pz, noTraffic ? showCars : showCars.length ? [...traffic.cars, ...showCars] : traffic.cars, env.night.value, camera);
-    camTarget.set(px, 1.45, pz);
+    camTarget.set(px, 1.45 + py, pz);
     // Third-person camera with wall collision: pull in at once when a wall
     // is in the way, ease back out (no camera inside buildings in alleys).
     const cp = Math.cos(input.pitch);
@@ -373,10 +384,10 @@ async function boot() {
     const oy = Math.sin(input.pitch);
     const oz = Math.cos(input.yaw) * cp;
     const want = input.dist;
-    const clear = game.camera_clear(px, 1.45, pz, px + ox * (want + 0.5), 1.6 + oy * (want + 0.5), pz + oz * (want + 0.5));
+    const clear = game.camera_clear(px, 1.45 + py, pz, px + ox * (want + 0.5), 1.6 + py + oy * (want + 0.5), pz + oz * (want + 0.5));
     const allowed = Math.max(0.6, clear * (want + 0.5) - 0.5);
     camDist = allowed < camDist ? allowed : camDist + (allowed - camDist) * Math.min(1, dt * 2.5);
-    camera.position.set(px + ox * camDist, 1.6 + oy * camDist, pz + oz * camDist);
+    camera.position.set(px + ox * camDist, 1.6 + py + oy * camDist, pz + oz * camDist);
     camera.lookAt(camTarget);
 
     post.atmo.lut = env.lut.texture;

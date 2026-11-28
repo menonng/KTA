@@ -32,7 +32,9 @@ cd web && npm ci && cd ..
 (cd tools/signgen && npm ci)   # 간판 그림을 다시 만들 때만 필요(폰트 약 360MB)
 ./scripts/build.sh          # 데이터 변환 → 간판 그림 → WASM 빌드 → 웹 번들(web/dist)
 # 3D 모델·가로수 텍스처를 다시 만들 때만:
-# (cd tools/asset-pipeline && npm ci && python3 fetch_models.py work && node build_models.mjs work ../../web/public/models && node build_trees.mjs work ../../web/public/textures)
+# (cd tools/asset-pipeline && npm ci && python3 fetch_models.py work && node build_models.mjs work ../../web/public/models && node build_trees.mjs work ../../web/public/textures && node build_species.mjs work ../../web/public/textures)
+# 실제 가로수 위치·수종(서울시 가로수 위치정보, 공공누리 4유형 — 저장소에 넣지 않음):
+# ./tools/asset-pipeline/fetch_trees.sh   # data-src/trees/hongdae_trees.tsv → 지도 변환 때 자동으로 읽음
 # 사람 모델을 다시 만들 때만(Rocketbox 원본 약 1.2GB):
 # (cd tools/asset-pipeline && ./fetch_people.sh work && node people/extract_fbx.mjs work/extract.json $(ls work/rb/Assets/Avatars/*/*/Export/*.fbx) && CMU=work/cmu/data node people/build_people.mjs work/extract.json work/rb ../../web/public/models ../../web/public/textures)
 # 동작만 다시 만들 때(수 초): (cd tools/asset-pipeline && CMU=work/cmu/data node people/build_motion.mjs ../../web/public/models)

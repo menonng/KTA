@@ -112,6 +112,16 @@ export class Game {
         wasm.game_free_meshes(this.__wbg_ptr);
     }
     /**
+     * Walking-surface height (raised pavements, kerb ramps, bus platforms).
+     * @param {number} x
+     * @param {number} z
+     * @returns {number}
+     */
+    ground_y(x, z) {
+        const ret = wasm.game_ground_y(this.__wbg_ptr, x, z);
+        return ret;
+    }
+    /**
      * Street lamp light pools: x, z.
      * @returns {Float32Array}
      */
@@ -160,6 +170,16 @@ export class Game {
         return this;
     }
     /**
+     * Point features (signals, crossings): x, z, kind.
+     * @returns {Float32Array}
+     */
+    nodes() {
+        const ret = wasm.game_nodes(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
      * Parked vehicles: x, z, yaw, type, paint seed per car.
      * @returns {Float32Array}
      */
@@ -168,6 +188,14 @@ export class Game {
         var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
         wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
         return v1;
+    }
+    /**
+     * Pointer to one float per pedestrian: eased ground height under the feet.
+     * @returns {number}
+     */
+    ped_y_ptr() {
+        const ret = wasm.game_ped_y_ptr(this.__wbg_ptr);
+        return ret >>> 0;
     }
     /**
      * Pointer to 6 floats: x, y, z, yaw, speed, phase.
@@ -207,7 +235,7 @@ export class Game {
         return ret >>> 0;
     }
     /**
-     * [pos_ptr, pos_len, attr_ptr, attr_len, idx_ptr, idx_len]
+     * [pos_ptr, pos_len, attr_ptr, attr_len, idx_ptr, idx_len, nrm_ptr, nrm_len]
      * @returns {Uint32Array}
      */
     roads_desc() {
@@ -261,6 +289,42 @@ export class Game {
      */
     step(dt, bits, fx, fz) {
         wasm.game_step(this.__wbg_ptr, dt, bits, fx, fz);
+    }
+    /**
+     * @param {number} i
+     * @returns {string}
+     */
+    stop_name(i) {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.game_stop_name(this.__wbg_ptr, i);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Bus stops: x, z, yaw, kind per stop (kta_core::data::stop).
+     * @returns {Float32Array}
+     */
+    stops() {
+        const ret = wasm.game_stops(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
+    }
+    /**
+     * Tactile paving: x, y, z, yaw, size x, size z, kind (0 dots, 1 lines).
+     * @returns {Float32Array}
+     */
+    tactile() {
+        const ret = wasm.game_tactile(this.__wbg_ptr);
+        var v1 = getArrayF32FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 4, 4);
+        return v1;
     }
     /**
      * Wire line segments: x0, y0, z0, x1, y1, z1, ...

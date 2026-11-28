@@ -3,6 +3,7 @@
 
 pub mod data;
 pub mod geom;
+pub mod kerb;
 pub mod mesh;
 pub mod props;
 pub mod sim;
@@ -16,6 +17,10 @@ pub struct World {
     pub map: MapData,
     pub chunks: Vec<MeshBuf>,
     pub roads: RoadBuf,
+    /// Walking-surface heights (raised pavements, kerb ramps).
+    pub ground: kerb::Ground,
+    /// Ground height under each pedestrian (same order as the crowd).
+    pub ped_y: Vec<f32>,
     pub grid: SegGrid,
     pub player: Player,
     pub crowd: Crowd,
@@ -30,13 +35,16 @@ impl World {
     pub fn new(bytes: &[u8], seed: u32, crowd: usize) -> Result<World, data::ParseError> {
         let map = data::parse(bytes)?;
         let chunks = mesh::build_chunks(&map, 96.0);
-        let roads = mesh::build_roads(&map);
         let crowd = Crowd::new(&map, crowd, seed);
-        let props = Props::new(&map);
+        let mut props = Props::new(&map);
+        let (roads, mut ground) = mesh::build_roads(&map, &props.crosswalks);
+        ground.add_platforms(&props.platforms);
+        props.finish(&map, &ground);
         let grid = SegGrid::with_obstacles(&map, 12.0, &props.obstacles);
         let skirt = props::ao_skirts(&map);
         let spill = props::light_spill(&map);
-        Ok(World { map, chunks, roads, grid, player: Player::default(), crowd, props, skirt, spill })
+        let ped_y = vec![0.0; crowd.len()];
+        Ok(World { map, chunks, roads, ground, ped_y, grid, player: Player::default(), crowd, props, skirt, spill })
     }
 
     /// Release generated mesh buffers once the renderer has uploaded them.
@@ -71,5 +79,15 @@ impl World {
             left -= h;
         }
         self.crowd.step(dt.min(0.25), Some([self.player.state[0], self.player.state[2]]));
+        // Feet follow kerbs and ramps; ease so a kerb step reads as a step, not a pop.
+        let k = 1.0 - (-dt.min(0.25) * 18.0).exp();
+        let gy = self.ground.height([self.player.state[0], self.player.state[2]]);
+        self.player.state[1] += (gy - self.player.state[1]) * k;
+        let st = &self.crowd.out;
+        self.ped_y.resize(st.len() / 4, 0.0);
+        for (i, y) in self.ped_y.iter_mut().enumerate() {
+            let gy = self.ground.height([st[i * 4], st[i * 4 + 1]]);
+            *y += (gy - *y) * k;
+        }
     }
 }

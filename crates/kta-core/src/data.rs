@@ -1,11 +1,16 @@
-//! Compact binary map tile format ("KTA1", version 2).
+//! Compact binary map tile format ("KTA1", version 3).
 //!
 //! All coordinates are local meters around the tile origin, quantized to
 //! 5 cm in i16 (range about ±1.6 km). x = east, z = south (north is -z).
 //! A building costs 8 + ceil(n/8) + 4·n bytes, so a district fits in ~130 KB.
+//!
+//! Version 3 adds a string table (road and bus-stop names), a name index per
+//! road, real street trees (one record per tree, species from the Seoul
+//! street-tree register), bus stops and point features (signals, crossings).
+//! Version 2 files still parse (the new lists come back empty).
 
 pub const MAGIC: &[u8; 4] = b"KTA1";
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 pub const Q: f32 = 0.05;
 /// Road kind flag: one-way carriageway (travel along point order).
 pub const ONEWAY: u8 = 0x80;
@@ -28,6 +33,86 @@ pub struct Road {
     pub pts: Vec<[f32; 2]>,
     pub kind: u8,
     pub width: f32,
+    /// Index into `MapData::names` (0 = unnamed).
+    pub name: u16,
+}
+
+/// One street tree at its surveyed position.
+#[derive(Clone, Debug, Default)]
+pub struct Tree {
+    pub x: f32,
+    pub z: f32,
+    /// `species::*`
+    pub species: u8,
+    /// 0..255 size variation (crown and height scale).
+    pub size: u8,
+}
+
+/// Street-tree species groups (서울시 가로수 위치정보 수종).
+pub mod species {
+    /// 은행나무
+    pub const GINKGO: u8 = 0;
+    /// 양버즘나무 (London plane)
+    pub const PLANE: u8 = 1;
+    /// 느티나무
+    pub const ZELKOVA: u8 = 2;
+    /// 이팝나무
+    pub const FRINGE: u8 = 3;
+    /// 벚나무류, 왕벚나무, 살구나무
+    pub const CHERRY: u8 = 4;
+    /// 회화나무
+    pub const PAGODA: u8 = 5;
+    /// 소나무, 향나무 (evergreen)
+    pub const PINE: u8 = 6;
+    /// 단풍나무, 공작단풍, 복자기, 중국단풍
+    pub const MAPLE: u8 = 7;
+    /// Everything else (라일락, 배롱나무, 무궁화, 대왕참나무 ...)
+    pub const OTHER: u8 = 8;
+    pub const COUNT: u8 = 9;
+}
+
+/// A bus stop.
+#[derive(Clone, Debug, Default)]
+pub struct Stop {
+    pub x: f32,
+    pub z: f32,
+    /// Direction the waiting side faces (towards the kerb / bus).
+    pub yaw: f32,
+    /// `stop::*`
+    pub kind: u8,
+    /// Index into `MapData::names`.
+    pub name: u16,
+}
+
+pub mod stop {
+    /// Pole sign only.
+    pub const POLE: u8 = 0;
+    /// Roadside shelter (서울 가로변 표준 쉘터).
+    pub const SHELTER: u8 = 1;
+    /// Roadside 스마트쉘터.
+    pub const SMART: u8 = 2;
+    /// Median (중앙버스전용차로) platform with a shelter.
+    pub const MEDIAN: u8 = 3;
+    /// Median platform with a 스마트쉘터 (홍대입구, 2021-08-27).
+    pub const MEDIAN_SMART: u8 = 4;
+}
+
+/// A point feature on the street network.
+#[derive(Clone, Debug, Default)]
+pub struct Node {
+    pub x: f32,
+    pub z: f32,
+    /// `node::*`
+    pub kind: u8,
+}
+
+pub mod node {
+    /// highway=traffic_signals (junction signal stop position)
+    pub const SIGNALS: u8 = 1;
+    /// highway=crossing with crossing=traffic_signals
+    pub const CROSSING_SIGNALS: u8 = 2;
+    /// highway=crossing marked (zebra) without signals
+    pub const CROSSING_MARKED: u8 = 3;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -64,6 +149,17 @@ pub struct MapData {
     pub roads: Vec<Road>,
     pub entrances: Vec<Entrance>,
     pub signs: Vec<Sign>,
+    /// String table; entry 0 is the empty string.
+    pub names: Vec<String>,
+    pub trees: Vec<Tree>,
+    pub stops: Vec<Stop>,
+    pub nodes: Vec<Node>,
+}
+
+impl MapData {
+    pub fn name(&self, i: u16) -> &str {
+        self.names.get(i as usize).map_or("", |s| s.as_str())
+    }
 }
 
 /// Building kinds (also used by the facade shader).
@@ -85,6 +181,8 @@ pub mod road {
     pub const PEDESTRIAN: u8 = 6;
     pub const FOOTWAY: u8 = 7;
     pub const LINK: u8 = 8;
+    /// Median bus-only carriageway (highway=busway, 중앙버스전용차로).
+    pub const BUS: u8 = 10;
 }
 
 #[derive(Debug)]
@@ -146,7 +244,8 @@ pub fn parse(bytes: &[u8]) -> Result<MapData, ParseError> {
     if r.take(4)? != MAGIC {
         return Err(ParseError("bad magic"));
     }
-    if r.u16()? != VERSION {
+    let ver = r.u16()?;
+    if ver != 2 && ver != VERSION {
         return Err(ParseError("unsupported version"));
     }
     let _reserved = r.u16()?;
@@ -156,6 +255,11 @@ pub fn parse(bytes: &[u8]) -> Result<MapData, ParseError> {
     let nr = r.u32()? as usize;
     let ne = r.u32()? as usize;
     let ns = r.u32()? as usize;
+    let (nt, nst, nn, nnames) = if ver >= 3 {
+        (r.u32()? as usize, r.u32()? as usize, r.u32()? as usize, r.u32()? as usize)
+    } else {
+        (0, 0, 0, 0)
+    };
 
     let mut buildings = Vec::with_capacity(nb);
     for _ in 0..nb {
@@ -177,11 +281,12 @@ pub fn parse(bytes: &[u8]) -> Result<MapData, ParseError> {
         let n = r.u16()? as usize;
         let kind = r.u8()?;
         let width = r.u8()? as f32 * 0.25;
+        let name = if ver >= 3 { r.u16()? } else { 0 };
         let mut pts = Vec::with_capacity(n);
         for _ in 0..n {
             pts.push(r.pt()?);
         }
-        roads.push(Road { pts, kind, width });
+        roads.push(Road { pts, kind, width, name });
     }
     let mut entrances = Vec::with_capacity(ne);
     for _ in 0..ne {
@@ -203,7 +308,38 @@ pub fn parse(bytes: &[u8]) -> Result<MapData, ParseError> {
         let _pad = r.u8()?;
         signs.push(Sign { x: p[0], y, z: p[1], yaw, w, h, label, vertical: flags & 1 != 0, mount: (flags >> 1) & 7 });
     }
-    Ok(MapData { origin_lat, origin_lon, buildings, roads, entrances, signs })
+    let mut trees = Vec::with_capacity(nt);
+    for _ in 0..nt {
+        let p = r.pt()?;
+        let species = r.u8()?;
+        let size = r.u8()?;
+        trees.push(Tree { x: p[0], z: p[1], species, size });
+    }
+    let mut stops = Vec::with_capacity(nst);
+    for _ in 0..nst {
+        let p = r.pt()?;
+        let yaw = yaw_from_u16(r.u16()?);
+        let kind = r.u8()?;
+        let _pad = r.u8()?;
+        let name = r.u16()?;
+        stops.push(Stop { x: p[0], z: p[1], yaw, kind, name });
+    }
+    let mut nodes = Vec::with_capacity(nn);
+    for _ in 0..nn {
+        let p = r.pt()?;
+        let kind = r.u8()?;
+        nodes.push(Node { x: p[0], z: p[1], kind });
+    }
+    let mut names = Vec::with_capacity(nnames.max(1));
+    for _ in 0..nnames {
+        let len = r.u8()? as usize;
+        let b = r.take(len)?;
+        names.push(String::from_utf8_lossy(b).into_owned());
+    }
+    if names.is_empty() {
+        names.push(String::new());
+    }
+    Ok(MapData { origin_lat, origin_lon, buildings, roads, entrances, signs, names, trees, stops, nodes })
 }
 
 fn q(v: f32) -> i16 {
@@ -217,7 +353,8 @@ pub fn write(m: &MapData) -> Vec<u8> {
     o.extend_from_slice(&0u16.to_le_bytes());
     o.extend_from_slice(&m.origin_lat.to_le_bytes());
     o.extend_from_slice(&m.origin_lon.to_le_bytes());
-    for n in [m.buildings.len(), m.roads.len(), m.entrances.len(), m.signs.len()] {
+    let names: Vec<&str> = if m.names.is_empty() { vec![""] } else { m.names.iter().map(|s| s.as_str()).collect() };
+    for n in [m.buildings.len(), m.roads.len(), m.entrances.len(), m.signs.len(), m.trees.len(), m.stops.len(), m.nodes.len(), names.len()] {
         o.extend_from_slice(&(n as u32).to_le_bytes());
     }
     let pt = |o: &mut Vec<u8>, p: &[f32; 2]| {
@@ -245,6 +382,7 @@ pub fn write(m: &MapData) -> Vec<u8> {
         o.extend_from_slice(&(r.pts.len() as u16).to_le_bytes());
         o.push(r.kind);
         o.push((r.width / 0.25).round().clamp(1.0, 255.0) as u8);
+        o.extend_from_slice(&r.name.to_le_bytes());
         for p in &r.pts {
             pt(&mut o, p);
         }
@@ -264,6 +402,31 @@ pub fn write(m: &MapData) -> Vec<u8> {
         o.extend_from_slice(&s.label.to_le_bytes());
         o.push(s.vertical as u8 | (s.mount & 7) << 1);
         o.push(0);
+    }
+    for t in &m.trees {
+        pt(&mut o, &[t.x, t.z]);
+        o.push(t.species);
+        o.push(t.size);
+    }
+    for s in &m.stops {
+        pt(&mut o, &[s.x, s.z]);
+        o.extend_from_slice(&yaw_to_u16(s.yaw).to_le_bytes());
+        o.push(s.kind);
+        o.push(0);
+        o.extend_from_slice(&s.name.to_le_bytes());
+    }
+    for n in &m.nodes {
+        pt(&mut o, &[n.x, n.z]);
+        o.push(n.kind);
+    }
+    for s in &names {
+        // Truncate on a char boundary to fit the u8 length.
+        let mut end = s.len().min(255);
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        o.push(end as u8);
+        o.extend_from_slice(&s.as_bytes()[..end]);
     }
     o
 }
@@ -286,9 +449,13 @@ mod tests {
                 shop: true,
                 street: vec![true, false, true],
             }],
-            roads: vec![Road { pts: vec![[0.0, 0.0], [5.0, 5.0]], kind: 1, width: 20.0 }],
+            roads: vec![Road { pts: vec![[0.0, 0.0], [5.0, 5.0]], kind: 1, width: 20.0, name: 1 }],
             entrances: vec![Entrance { x: 1.0, z: 2.0, yaw: 1.0, exit_no: 9 }],
             signs: vec![Sign { x: 1.0, y: 3.5, z: 2.0, yaw: 0.5, w: 3.0, h: 0.9, label: 3, vertical: true, mount: 4 }],
+            names: vec![String::new(), "양화로".into(), "홍대입구역".into()],
+            trees: vec![Tree { x: 3.0, z: -4.0, species: species::PLANE, size: 200 }],
+            stops: vec![Stop { x: 7.0, z: 1.0, yaw: 2.0, kind: stop::MEDIAN_SMART, name: 2 }],
+            nodes: vec![Node { x: -2.0, z: 9.0, kind: node::SIGNALS }],
         };
         let b = write(&m);
         let p = parse(&b).unwrap();
@@ -300,5 +467,12 @@ mod tests {
         assert!(p.signs[0].vertical);
         assert_eq!(p.signs[0].mount, 4);
         assert!((p.roads[0].width - 20.0).abs() < 0.01);
+        assert_eq!(p.name(p.roads[0].name), "양화로");
+        assert_eq!(p.trees[0].species, species::PLANE);
+        assert_eq!(p.trees[0].size, 200);
+        assert_eq!(p.stops[0].kind, stop::MEDIAN_SMART);
+        assert_eq!(p.name(p.stops[0].name), "홍대입구역");
+        assert_eq!(p.nodes[0].kind, node::SIGNALS);
+        assert!((p.nodes[0].z - 9.0).abs() < 0.05);
     }
 }

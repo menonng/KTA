@@ -2,9 +2,9 @@
 //! sign label table. Brand names are mapped to parody names (docs/brand-bible.md);
 //! independent shops get generic category signs instead of their real names.
 //!
-//! Usage: kta-datatool <input.osm> <out_dir> <name>
+//! Usage: kta-datatool <input.osm> <out_dir> <name> [signreq_dir] [gis.tsv] [trees.tsv]
 
-use kta_core::data::{self, kind, road, Building, Entrance, MapData, Road, Sign};
+use kta_core::data::{self, kind, node, road, species, stop, Building, Entrance, MapData, Node, Road, Sign, Stop, Tree};
 use kta_core::geom::{clean_polygon, closest_on_segment, signed_area, P2};
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -291,12 +291,17 @@ fn main() {
     let mut poi_nodes = Vec::new();
     let mut station_pts = Vec::new();
     let mut entrance_nodes = Vec::new();
+    // Bus stops (lat, lon, name, shelter tag) and signal / crossing nodes.
+    let mut stop_nodes: Vec<(f64, f64, String, Option<bool>)> = Vec::new();
+    let mut feature_nodes: Vec<(f64, f64, u8)> = Vec::new();
     let mut bounds = None;
+    let mut bbox = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
     for n in root.children().filter(|n| n.is_element()) {
         match n.tag_name().name() {
             "bounds" => {
                 let g = |k| n.attribute(k).and_then(|v: &str| v.parse::<f64>().ok()).unwrap_or(0.0);
                 bounds = Some(((g("minlat") + g("maxlat")) * 0.5, (g("minlon") + g("maxlon")) * 0.5));
+                bbox = (g("minlat"), g("maxlat"), g("minlon"), g("maxlon"));
             }
             "node" => {
                 let id: i64 = n.attribute("id").unwrap().parse().unwrap();
@@ -316,6 +321,16 @@ fn main() {
                     let r = t.get("ref").or(t.get("name")).copied().unwrap_or("");
                     let no = parse_num(r.trim_start_matches(|c: char| !c.is_ascii_digit())).unwrap_or(0.0) as u8;
                     entrance_nodes.push((lat, lon, no));
+                }
+                if t.get("highway") == Some(&"bus_stop") || (t.get("public_transport") == Some(&"platform") && t.get("bus") == Some(&"yes")) {
+                    let shelter = t.get("shelter").map(|v| *v == "yes");
+                    stop_nodes.push((lat, lon, name.to_string(), shelter));
+                }
+                match (t.get("highway").copied(), t.get("crossing").copied()) {
+                    (Some("traffic_signals"), _) => feature_nodes.push((lat, lon, node::SIGNALS)),
+                    (Some("crossing"), Some("traffic_signals")) => feature_nodes.push((lat, lon, node::CROSSING_SIGNALS)),
+                    (Some("crossing"), Some("marked" | "zebra" | "uncontrolled")) => feature_nodes.push((lat, lon, node::CROSSING_MARKED)),
+                    _ => {}
                 }
                 if t.contains_key("shop") || t.contains_key("amenity") || t.contains_key("tourism") {
                     poi_nodes.push((id, lat, lon, t));
@@ -351,6 +366,18 @@ fn main() {
     let mut ways: HashMap<i64, Vec<i64>> = HashMap::new();
     let mut buildings: Vec<Building> = Vec::new();
     let mut roads: Vec<Road> = Vec::new();
+    // String table (road and stop names); entry 0 = unnamed.
+    let mut names: Vec<String> = vec![String::new()];
+    let mut name_ix: HashMap<String, u16> = HashMap::new();
+    let mut intern = |s: &str, names: &mut Vec<String>| -> u16 {
+        if s.is_empty() {
+            return 0;
+        }
+        *name_ix.entry(s.to_string()).or_insert_with(|| {
+            names.push(s.to_string());
+            (names.len() - 1) as u16
+        })
+    };
 
     let make_building = |id: u64, ring: Vec<P2>, t: &Tags| -> Option<Building> {
         let mut pts = ring;
@@ -422,7 +449,7 @@ fn main() {
                 buildings.push(b);
             }
         } else if let Some(&hw) = t.get("highway") {
-            let skip = matches!(hw, "corridor" | "steps" | "platform" | "busway" | "construction" | "proposed" | "elevator")
+            let skip = matches!(hw, "corridor" | "steps" | "platform" | "construction" | "proposed" | "elevator")
                 || t.get("tunnel").map_or(false, |v| *v != "no")
                 || t.get("area") == Some(&"yes")
                 || t.get("layer").and_then(|v| v.parse::<i32>().ok()).map_or(false, |l| l < 0);
@@ -435,6 +462,7 @@ fn main() {
                 "service" => road::SERVICE,
                 "pedestrian" => road::PEDESTRIAN,
                 "footway" | "path" | "cycleway" => road::FOOTWAY,
+                "busway" => road::BUS,
                 _ => 0,
             };
             if !skip && rk != 0 {
@@ -449,15 +477,19 @@ fn main() {
                     road::RESIDENTIAL => 6.0,
                     road::SERVICE => 4.0,
                     road::PEDESTRIAN => 8.0,
+                    // One median bus lane per direction (3.5 m) plus its share of the marking.
+                    road::BUS => 5.0,
                     _ => 2.6,
                 };
+                let lanes_w = if rk == road::BUS { None } else { t.get("lanes").and_then(|v| parse_num(v)).map(|l| l * 3.25 + 1.0) };
                 let width = t
                     .get("width")
                     .and_then(|v| parse_num(v))
-                    .or_else(|| t.get("lanes").and_then(|v| parse_num(v)).map(|l| l * 3.25 + 1.0))
+                    .or(lanes_w)
                     .unwrap_or(if oneway { default_w * 0.5 + 1.0 } else { default_w })
                     .clamp(1.5, 60.0);
                 let rk = if oneway { rk | data::ONEWAY } else { rk };
+                let name = intern(t.get("name").copied().unwrap_or(""), &mut names);
                 let mut pts = pts;
                 if reverse {
                     pts.reverse();
@@ -467,7 +499,7 @@ fn main() {
                 let flush = |run: &mut Vec<P2>, roads: &mut Vec<Road>| {
                     run.dedup_by(|a, b| kta_core::geom::dist2(*a, *b) < 0.01);
                     if run.len() >= 2 {
-                        roads.push(Road { pts: std::mem::take(run), kind: rk, width });
+                        roads.push(Road { pts: std::mem::take(run), kind: rk, width, name });
                     } else {
                         run.clear();
                     }
@@ -1219,7 +1251,213 @@ fn main() {
         signs.push(Sign { x: e.x - fx * 2.33, y: 3.2, z: e.z - fz * 2.33, yaw: e.yaw + std::f32::consts::PI, w: 1.9, h: 0.6, label: li, vertical: false, mount: 0 });
     }
 
-    let map = MapData { origin_lat: lat0, origin_lon: lon0, buildings, roads, entrances, signs };
+    // ---- Street trees: surveyed positions and species (서울시 가로수 위치정보) ----
+    // tools/asset-pipeline/fetch_trees.sh writes the TSV (lat, lon, species, ...).
+    // Without it the prop placer falls back to procedural ginkgo rows.
+    let tree_path = args.get(6).cloned().unwrap_or_else(|| "data-src/trees/hongdae_trees.tsv".into());
+    let mut trees: Vec<Tree> = Vec::new();
+    if let Ok(txt) = std::fs::read_to_string(&tree_path) {
+        let mut seen: HashMap<(i32, i32), ()> = HashMap::new();
+        for line in txt.lines() {
+            if line.starts_with('#') {
+                continue;
+            }
+            let f: Vec<&str> = line.split('\t').collect();
+            if f.len() < 3 {
+                continue;
+            }
+            let (Ok(lat), Ok(lon)) = (f[0].parse::<f64>(), f[1].parse::<f64>()) else { continue };
+            let p = pr.p(lat, lon);
+            // Only where the OSM extract has streets around the tree.
+            if !inside(p) || lat < bbox.0 || lat > bbox.1 || lon < bbox.2 || lon > bbox.3 {
+                continue;
+            }
+            // The register lists a few trees twice (same spot, two managers).
+            if seen.insert(((p[0] * 2.0).round() as i32, (p[1] * 2.0).round() as i32), ()).is_some() {
+                continue;
+            }
+            let sp = f[2];
+            let species = if sp.starts_with("은행나무") {
+                species::GINKGO
+            } else if sp.contains("버즘") || sp.contains("플라타너스") {
+                species::PLANE
+            } else if sp.starts_with("느티") {
+                species::ZELKOVA
+            } else if sp.starts_with("이팝") {
+                species::FRINGE
+            } else if sp.contains("벚") || sp.starts_with("살구") || sp.starts_with("매화") {
+                species::CHERRY
+            } else if sp.starts_with("회화") {
+                species::PAGODA
+            } else if sp.contains("소나무") || sp.contains("향나무") || sp.contains("주목") {
+                species::PINE
+            } else if sp.contains("단풍") || sp.starts_with("복자기") {
+                species::MAPLE
+            } else {
+                species::OTHER
+            };
+            let h = hash(((p[0] * 20.0) as i64 as u64) << 20 ^ (p[1] * 20.0) as i64 as u64);
+            trees.push(Tree { x: p[0], z: p[1], species, size: (h % 256) as u8 });
+        }
+        eprintln!("street trees: {} from {}", trees.len(), tree_path);
+    }
+
+    // ---- Bus stops: snapped to the kerb of the nearest carriageway ----
+    let nearest_carriageway = |p: P2| -> Option<(f32, P2, P2, &Road)> {
+        let mut best: Option<(f32, P2, P2, &Road)> = None;
+        for r in &roads {
+            let base = r.kind & !data::ONEWAY;
+            if !matches!(base, road::PRIMARY | road::SECONDARY | road::TERTIARY | road::LINK | road::RESIDENTIAL | road::BUS) {
+                continue;
+            }
+            for s in r.pts.windows(2) {
+                let (c, _) = closest_on_segment(p, s[0], s[1]);
+                // Distance to the carriageway edge, not the centreline.
+                let d = kta_core::geom::dist2(p, c).sqrt() - r.width * 0.5;
+                let l = kta_core::geom::dist2(s[0], s[1]).sqrt().max(1e-3);
+                let dir = [(s[1][0] - s[0][0]) / l, (s[1][1] - s[0][1]) / l];
+                if best.map_or(true, |b| d < b.0) {
+                    best = Some((d, c, dir, r));
+                }
+            }
+        }
+        best
+    };
+    // Nearest median busway centreline (OSM highway=busway) within 11 m.
+    let nearest_busway = |p: P2| -> Option<(f32, P2, P2, &Road)> {
+        let mut best: Option<(f32, P2, P2, &Road)> = None;
+        for r in roads.iter().filter(|r| r.kind & !data::ONEWAY == road::BUS) {
+            for s in r.pts.windows(2) {
+                let (c, _) = closest_on_segment(p, s[0], s[1]);
+                let d = kta_core::geom::dist2(p, c).sqrt();
+                let l = kta_core::geom::dist2(s[0], s[1]).sqrt().max(1e-3);
+                if d < 11.0 && best.map_or(true, |b| d < b.0) {
+                    best = Some((d, c, [(s[1][0] - s[0][0]) / l, (s[1][1] - s[0][1]) / l], r));
+                }
+            }
+        }
+        best
+    };
+    let mut stops: Vec<Stop> = Vec::new();
+    // Distance of each median stop to its busway (merge keeps the closest).
+    let mut stop_bd: Vec<f32> = Vec::new();
+    for (lat, lon, name, shelter) in &stop_nodes {
+        let p = pr.p(*lat, *lon);
+        if !inside(p) {
+            continue;
+        }
+        // Stops named after a station exit (…출구) are kerbside, even next to the bus lane.
+        let bus = if name.contains("출구") { None } else { nearest_busway(p) };
+        let bd = bus.map_or(f32::MAX, |b| b.0);
+        let Some((_, c, dir, r)) = bus.or_else(|| nearest_carriageway(p)) else { continue };
+        let base = r.kind & !data::ONEWAY;
+        let nrm = [dir[1], -dir[0]];
+        let side = if (p[0] - c[0]) * nrm[0] + (p[1] - c[1]) * nrm[1] >= 0.0 { 1.0 } else { -1.0 };
+        let half = r.width * 0.5;
+        let (kind, off) = if base == road::BUS {
+            // 홍대입구 median stop: 스마트쉘터 since 2021-08-27 (서울시 미디어허브).
+            (if name.contains("홍대입구") { stop::MEDIAN_SMART } else { stop::MEDIAN }, half + 1.6)
+        } else {
+            let main = matches!(base, road::PRIMARY | road::SECONDARY | road::TERTIARY);
+            let k = match shelter {
+                Some(true) => stop::SHELTER,
+                Some(false) => stop::POLE,
+                None if main => stop::SHELTER,
+                None => stop::POLE,
+            };
+            (k, half + if k == stop::POLE { 0.5 } else { 1.5 })
+        };
+        let q = [c[0] + nrm[0] * side * off, c[1] + nrm[1] * side * off];
+        // Face the bus: towards the carriageway.
+        let face = [-nrm[0] * side, -nrm[1] * side];
+        let yaw = face[0].atan2(face[1]);
+        // OSM often has the platform and the pole a few metres apart: keep one.
+        // A median platform is one per direction (several nodes along it).
+        let same_dir = |s: &Stop| (((s.yaw - yaw + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)) - std::f32::consts::PI).abs() < 1.0;
+        let reach = if kind >= stop::MEDIAN { 60.0 } else { 15.0 };
+        if let Some(j) = stops.iter().position(|s| kta_core::geom::dist2([s.x, s.z], q) < reach * reach && names[s.name as usize] == *name && (kind < stop::MEDIAN || same_dir(s))) {
+            if kind >= stop::MEDIAN && bd < stop_bd[j] {
+                stops[j].x = q[0];
+                stops[j].z = q[1];
+                stops[j].yaw = yaw;
+                stop_bd[j] = bd;
+            }
+            continue;
+        }
+        let ni = intern(name, &mut names);
+        stops.push(Stop { x: q[0], z: q[1], yaw, kind, name: ni });
+        stop_bd.push(bd);
+    }
+    eprintln!(
+        "bus stops: {} ({} median, {} shelters, {} poles)",
+        stops.len(),
+        stops.iter().filter(|s| s.kind >= stop::MEDIAN).count(),
+        stops.iter().filter(|s| s.kind == stop::SHELTER || s.kind == stop::SMART).count(),
+        stops.iter().filter(|s| s.kind == stop::POLE).count()
+    );
+    // Dual carriageways next to a median busway: OSM lane counts (turn pockets
+    // included) make the halves overlap the bus lanes and platforms, so narrow
+    // each half to the space between its centreline and the busway (leaving
+    // a 3.2 m platform beside median stops, 0.4 m elsewhere).
+    {
+        let bus: Vec<(P2, P2, f32)> = roads
+            .iter()
+            .filter(|r| r.kind & !data::ONEWAY == road::BUS)
+            .flat_map(|r| r.pts.windows(2).map(move |s| (s[0], s[1], r.width * 0.5)))
+            .collect();
+        let platforms: Vec<P2> = stops.iter().filter(|s| s.kind >= stop::MEDIAN).map(|s| [s.x, s.z]).collect();
+        let mut shrunk = 0;
+        for r in roads.iter_mut() {
+            let base = r.kind & !data::ONEWAY;
+            if !matches!(base, road::PRIMARY | road::SECONDARY | road::TERTIARY) {
+                continue;
+            }
+            let mut half = r.width * 0.5;
+            for s in r.pts.windows(2) {
+                let l = kta_core::geom::dist2(s[0], s[1]).sqrt();
+                if l < 1e-3 {
+                    continue;
+                }
+                let dir = [(s[1][0] - s[0][0]) / l, (s[1][1] - s[0][1]) / l];
+                let n = (l / 4.0).ceil() as usize;
+                for k in 0..=n {
+                    let t = k as f32 / n as f32;
+                    let p = [s[0][0] + (s[1][0] - s[0][0]) * t, s[0][1] + (s[1][1] - s[0][1]) * t];
+                    for &(a, b, bh) in &bus {
+                        let bl = kta_core::geom::dist2(a, b).sqrt().max(1e-3);
+                        let bd = [(b[0] - a[0]) / bl, (b[1] - a[1]) / bl];
+                        if (bd[0] * dir[0] + bd[1] * dir[1]).abs() < 0.85 {
+                            continue;
+                        }
+                        let (c, u) = closest_on_segment(p, a, b);
+                        if u <= 0.0 || u >= 1.0 {
+                            continue;
+                        }
+                        let d = kta_core::geom::dist2(p, c).sqrt();
+                        let gap = if platforms.iter().any(|q| kta_core::geom::dist2(*q, p) < 30.0 * 30.0) { 3.2 } else { 0.4 };
+                        if d > 1.5 && d < half + bh + gap {
+                            half = (d - bh - gap).max(3.3);
+                        }
+                    }
+                }
+            }
+            if half < r.width * 0.5 - 0.05 {
+                r.width = half * 2.0;
+                shrunk += 1;
+            }
+        }
+        eprintln!("carriageways narrowed beside median busways: {}", shrunk);
+    }
+
+    let mut nodes_out: Vec<Node> = Vec::new();
+    for (lat, lon, k) in &feature_nodes {
+        let p = pr.p(*lat, *lon);
+        if inside(p) {
+            nodes_out.push(Node { x: p[0], z: p[1], kind: *k });
+        }
+    }
+
+    let map = MapData { origin_lat: lat0, origin_lon: lon0, buildings, roads, entrances, signs, names, trees, stops, nodes: nodes_out };
     let bin = data::write(&map);
     let out_dir = std::path::Path::new(&args[2]);
     std::fs::create_dir_all(out_dir).unwrap();
@@ -1245,11 +1483,14 @@ fn main() {
     let _ = std::fs::remove_file(out_dir.join(format!("{}.labels.json", args[3])));
 
     eprintln!(
-        "origin {:.6},{:.6} | buildings {} roads {} entrances {} signs {} (brand {}, generic {}, skipped {}) labels {} | {} bytes",
+        "origin {:.6},{:.6} | buildings {} roads {} trees {} stops {} nodes {} entrances {} signs {} (brand {}, generic {}, skipped {}) labels {} | {} bytes",
         lat0,
         lon0,
         map.buildings.len(),
         map.roads.len(),
+        map.trees.len(),
+        map.stops.len(),
+        map.nodes.len(),
         map.entrances.len(),
         map.signs.len(),
         brand_count,

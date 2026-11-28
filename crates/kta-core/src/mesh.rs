@@ -167,6 +167,8 @@ pub struct RoadBuf {
     pub pos: Vec<f32>,
     /// Per vertex: along (m), across (m), kind, half width (m).
     pub attr: Vec<f32>,
+    /// Per vertex normal (x, y, z as i8; up for flat ground, sideways on kerbs).
+    pub nrm: Vec<i8>,
     pub idx: Vec<u32>,
 }
 
@@ -182,6 +184,7 @@ fn road_y(kind: u8) -> f32 {
         road::RESIDENTIAL => 0.054,
         road::SERVICE => 0.050,
         road::FOOTWAY => 0.046,
+        road::BUS => 0.082,
         _ => 0.030,
     }
 }
@@ -224,6 +227,7 @@ fn ribbon(rb: &mut RoadBuf, pts: &[P2], left: f32, right: f32, y: f32, kind_attr
         rb.attr.extend_from_slice(&[along, left, kind_attr, half]);
         rb.pos.extend_from_slice(&[p[0] + nrm[0] * right * k, y, p[1] + nrm[1] * right * k]);
         rb.attr.extend_from_slice(&[along, right, kind_attr, half]);
+        rb.nrm.extend_from_slice(&[0, 127, 0, 0, 127, 0]);
     }
     for i in 0..(n as u32 - 1) {
         let l0 = base + i * 2;
@@ -242,35 +246,22 @@ fn ribbon(rb: &mut RoadBuf, pts: &[P2], left: f32, right: f32, y: f32, kind_attr
     }
 }
 
-pub fn build_roads(m: &MapData) -> RoadBuf {
+/// Carriageways plus raised pavements with kerbs (see kerb.rs). `crosswalks`
+/// (x, z, yaw, width, length each) lower the kerb at their ends.
+pub fn build_roads(m: &MapData, crosswalks: &[f32]) -> (RoadBuf, crate::kerb::Ground) {
     let mut rb = RoadBuf::default();
-    // Sidewalks first (under roads). One-way carriageways get a sidewalk on
-    // the right-hand side of travel only, so dual carriageways keep a median.
-    for (i, r) in m.roads.iter().enumerate() {
-        let base = r.kind & !ONEWAY;
-        let oneway = r.kind & ONEWAY != 0;
-        let sw = match base {
-            road::PRIMARY => 4.0,
-            road::SECONDARY => 3.2,
-            road::TERTIARY => 2.6,
-            _ => 0.0,
-        };
-        if sw > 0.0 {
-            let eps = (i % 8) as f32 * 0.0006;
-            let h = r.width * 0.5;
-            let left = if oneway { -h + 0.4 } else { h + sw };
-            ribbon(&mut rb, &r.pts, left, -(h + sw), 0.026 + eps, SIDEWALK as f32, h + sw);
-        }
-    }
     for (i, r) in m.roads.iter().enumerate() {
         let base = r.kind & !ONEWAY;
         let oneway = r.kind & ONEWAY != 0;
         let eps = (i % 16) as f32 * 0.0004;
         let h = r.width * 0.5;
-        let kind_attr = base as f32 + if oneway { 16.0 } else { 0.0 };
+        // Hongdae Red Road: 어울마당로 has red anti-slip surfacing along both edges.
+        let red = m.name(r.name) == "어울마당로";
+        let kind_attr = base as f32 + if oneway { 16.0 } else { 0.0 } + if red { 32.0 } else { 0.0 };
         ribbon(&mut rb, &r.pts, h, -h, road_y(base) + eps, kind_attr, h);
     }
-    rb
+    let ground = crate::kerb::build(m, crosswalks, &mut rb);
+    (rb, ground)
 }
 
 #[cfg(test)]

@@ -252,6 +252,15 @@ pub const M_MANHOLE: u8 = 4;
 pub const M_SHUTTER: u8 = 5;
 pub const M_COVEREDCAR: u8 = 6;
 pub const M_TREE: u8 = 7;
+/// Street-tree species models follow the ginkgo: M_TREE + species::* (7..=15).
+pub const M_SHELTER: u8 = 16;
+pub const M_SMART_SHELTER: u8 = 17;
+pub const M_STOP_POLE: u8 = 18;
+pub const M_PARASOL: u8 = 19;
+
+/// Tactile paving (점자블록) kinds for `Props::tactile`.
+pub const TACTILE_DOTS: f32 = 0.0;
+pub const TACTILE_LINES: f32 = 1.0;
 
 /// Vehicle types (matches web/src/render/cars.ts CAR_TYPES) and their
 /// footprint half-extents (width, length) in meters.
@@ -282,6 +291,10 @@ pub struct Props {
     pub crosswalks: Vec<f32>,
     /// x, z of light pools under street lamps
     pub lamps: Vec<f32>,
+    /// Tactile paving: x, y, z, yaw, size x, size z, kind (TACTILE_*). Lines run along local z.
+    pub tactile: Vec<f32>,
+    /// Median bus platforms (raised walking surface): four corners each, height.
+    pub platforms: Vec<([P2; 4], f32)>,
     pub scratch: PropMesh,
     pub prim_count: usize,
 }
@@ -308,6 +321,48 @@ impl<'a> Ctx<'a> {
             }
         }
         best
+    }
+    /// If p lies on a carriageway (or within `margin` of its edge), the point
+    /// pushed out to `margin` beyond the edge, with that road's kind.
+    fn out_of_carriageway(&mut self, p: P2, margin: f32) -> Option<(P2, u8)> {
+        self.road_grid.near(p, &mut self.tmp);
+        let mut best: Option<(f32, P2, u8)> = None;
+        for &i in &self.tmp {
+            let (a, b, half, k) = self.road_segs[i as usize];
+            if matches!(k & !ONEWAY, road::FOOTWAY | road::PEDESTRIAN) {
+                continue;
+            }
+            let (c, _) = closest_on_segment(p, a, b);
+            let d = crate::geom::dist2(p, c).sqrt();
+            if d < half + margin {
+                let pen = half + margin - d;
+                if best.map_or(true, |bb| pen > bb.0) {
+                    let n = if d > 1e-3 {
+                        [(p[0] - c[0]) / d, (p[1] - c[1]) / d]
+                    } else {
+                        let l = crate::geom::dist2(a, b).sqrt().max(1e-3);
+                        [(b[1] - a[1]) / l, -(b[0] - a[0]) / l]
+                    };
+                    best = Some((pen, [c[0] + n[0] * (half + margin), c[1] + n[1] * (half + margin)], k));
+                }
+            }
+        }
+        best.map(|b| (b.1, b.2))
+    }
+    /// Direction of the nearest road segment.
+    fn road_dir(&mut self, p: P2) -> Option<P2> {
+        self.road_grid.near(p, &mut self.tmp);
+        let mut best: Option<(f32, P2)> = None;
+        for &i in &self.tmp {
+            let (a, b, _, _) = self.road_segs[i as usize];
+            let (c, _) = closest_on_segment(p, a, b);
+            let d = crate::geom::dist2(p, c);
+            if best.map_or(true, |bb| d < bb.0) {
+                let l = crate::geom::dist2(a, b).sqrt().max(1e-3);
+                best = Some((d, [(b[0] - a[0]) / l, (b[1] - a[1]) / l]));
+            }
+        }
+        best.map(|b| b.1)
     }
     fn in_building(&mut self, p: P2, margin: f32) -> bool {
         self.bld_grid.near(p, &mut self.tmp);
@@ -354,56 +409,62 @@ fn yaw_of(n: P2) -> f32 {
     n[0].atan2(n[1])
 }
 
+fn make_ctx(m: &MapData) -> Ctx<'_> {
+    let mut mn = [f32::MAX, f32::MAX];
+    let mut mx = [f32::MIN, f32::MIN];
+    for b in &m.buildings {
+        for p in &b.pts {
+            mn = [mn[0].min(p[0]), mn[1].min(p[1])];
+            mx = [mx[0].max(p[0]), mx[1].max(p[1])];
+        }
+    }
+    for r in &m.roads {
+        for p in &r.pts {
+            mn = [mn[0].min(p[0]), mn[1].min(p[1])];
+            mx = [mx[0].max(p[0]), mx[1].max(p[1])];
+        }
+    }
+    if mn[0] > mx[0] {
+        mn = [0.0, 0.0];
+        mx = [1.0, 1.0];
+    }
+    let mut road_grid = Grid::new(mn, mx, 24.0);
+    let mut road_segs = Vec::new();
+    for r in &m.roads {
+        for s in r.pts.windows(2) {
+            let id = road_segs.len() as u32;
+            road_segs.push((s[0], s[1], r.width * 0.5, r.kind));
+            let pad = r.width * 0.5 + 6.0;
+            road_grid.insert_box(
+                [s[0][0].min(s[1][0]) - pad, s[0][1].min(s[1][1]) - pad],
+                [s[0][0].max(s[1][0]) + pad, s[0][1].max(s[1][1]) + pad],
+                id,
+            );
+        }
+    }
+    let mut bld_grid = Grid::new(mn, mx, 24.0);
+    for (i, b) in m.buildings.iter().enumerate() {
+        let mut lo = [f32::MAX, f32::MAX];
+        let mut hi = [f32::MIN, f32::MIN];
+        for p in &b.pts {
+            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+        }
+        bld_grid.insert_box([lo[0] - 2.0, lo[1] - 2.0], [hi[0] + 2.0, hi[1] + 2.0], i as u32);
+    }
+    Ctx { m, road_grid, road_segs, bld_grid, tmp: Vec::new() }
+}
+
 impl Props {
     pub fn new(m: &MapData) -> Props {
-        let mut mn = [f32::MAX, f32::MAX];
-        let mut mx = [f32::MIN, f32::MIN];
-        for b in &m.buildings {
-            for p in &b.pts {
-                mn = [mn[0].min(p[0]), mn[1].min(p[1])];
-                mx = [mx[0].max(p[0]), mx[1].max(p[1])];
-            }
-        }
-        for r in &m.roads {
-            for p in &r.pts {
-                mn = [mn[0].min(p[0]), mn[1].min(p[1])];
-                mx = [mx[0].max(p[0]), mx[1].max(p[1])];
-            }
-        }
-        if mn[0] > mx[0] {
-            mn = [0.0, 0.0];
-            mx = [1.0, 1.0];
-        }
-        let mut road_grid = Grid::new(mn, mx, 24.0);
-        let mut road_segs = Vec::new();
-        for r in &m.roads {
-            for s in r.pts.windows(2) {
-                let id = road_segs.len() as u32;
-                road_segs.push((s[0], s[1], r.width * 0.5, r.kind));
-                let pad = r.width * 0.5 + 6.0;
-                road_grid.insert_box(
-                    [s[0][0].min(s[1][0]) - pad, s[0][1].min(s[1][1]) - pad],
-                    [s[0][0].max(s[1][0]) + pad, s[0][1].max(s[1][1]) + pad],
-                    id,
-                );
-            }
-        }
-        let mut bld_grid = Grid::new(mn, mx, 24.0);
-        for (i, b) in m.buildings.iter().enumerate() {
-            let mut lo = [f32::MAX, f32::MAX];
-            let mut hi = [f32::MIN, f32::MIN];
-            for p in &b.pts {
-                lo = [lo[0].min(p[0]), lo[1].min(p[1])];
-                hi = [hi[0].max(p[0]), hi[1].max(p[1])];
-            }
-            bld_grid.insert_box([lo[0] - 2.0, lo[1] - 2.0], [hi[0] + 2.0, hi[1] + 2.0], i as u32);
-        }
-        let mut ctx = Ctx { m, road_grid, road_segs, bld_grid, tmp: Vec::new() };
+        let mut ctx = make_ctx(m);
         let mut p = Props {
             cells: HashMap::new(),
             wires: Vec::new(),
             crosswalks: Vec::new(),
             lamps: Vec::new(),
+            tactile: Vec::new(),
+            platforms: Vec::new(),
             scratch: PropMesh::default(),
             prim_count: 0,
             insts: HashMap::new(),
@@ -412,6 +473,8 @@ impl Props {
         };
         p.place_buildings(&mut ctx);
         p.place_streets(&mut ctx);
+        p.place_trees(&mut ctx);
+        p.place_stops(&mut ctx);
         p.prim_count = p.cells.values().map(|v| v.len()).sum();
         p
     }
@@ -733,9 +796,11 @@ impl Props {
 
             if major {
                 let sides: &[f32] = if oneway { &[-1.0] } else { &[1.0, -1.0] };
-                // Ginkgo street trees (yellow in late November).
+                // Procedural ginkgo rows only when the map has no surveyed trees.
                 let mut trees = Vec::new();
-                walk(9.0, 4.0, &mut |p, dir| trees.push((p, dir)));
+                if m.trees.is_empty() {
+                    walk(9.0, 4.0, &mut |p, dir| trees.push((p, dir)));
+                }
                 for &(p, dir) in &trees {
                     for &sd in sides {
                         let nrm = [dir[1] * sd, -dir[0] * sd];
@@ -930,6 +995,172 @@ impl Props {
                     }
                 }
             }
+        }
+    }
+
+    /// Surveyed street trees (서울시 가로수 위치정보): species model, size
+    /// variation, and an iron guard grate where the tree stands in a main-road
+    /// pavement. Survey points that land on a carriageway are nudged to its edge.
+    fn place_trees(&mut self, ctx: &mut Ctx) {
+        let m = ctx.m;
+        for t in &m.trees {
+            let mut p = [t.x, t.z];
+            let mut main = false;
+            for _ in 0..2 {
+                if let Some((q, k)) = ctx.out_of_carriageway(p, 0.9) {
+                    p = q;
+                    main |= matches!(k & !ONEWAY, road::PRIMARY | road::SECONDARY | road::TERTIARY);
+                }
+            }
+            if ctx.in_building(p, 0.5) {
+                continue;
+            }
+            if let Some((d, k)) = ctx.road_near(p, 4.5) {
+                main |= d > -0.2 && matches!(k & !ONEWAY, road::PRIMARY | road::SECONDARY | road::TERTIARY);
+            }
+            let mut tr = Rng::new((p[0] * 13.0) as i32 as u32 ^ ((p[1] * 7.0) as i32 as u32).rotate_left(16));
+            let sc = 0.82 + t.size as f32 / 255.0 * 0.4;
+            let model = M_TREE + t.species.min(crate::data::species::COUNT - 1);
+            self.inst(model, [p[0], 0.0, p[1]], tr.range(0.0, 6.28), [sc, sc * tr.range(0.92, 1.1), sc]);
+            if main {
+                // 가로수 보호판: square cast-iron grate flush with the pavement.
+                let yaw = ctx.road_dir(p).map_or(0.0, yaw_of);
+                self.bx([p[0], 0.0, p[1]], yaw, [1.3, 0.02, 1.3], rgb(0x2e2f30));
+            }
+        }
+    }
+
+    /// Bus stops: Seoul roadside shelters, pole signs and the median platforms
+    /// of the Yanghwa-ro bus lane (홍대입구: 스마트쉘터 on a 3-berth platform).
+    fn place_stops(&mut self, ctx: &mut Ctx) {
+        use crate::data::stop;
+        let m = ctx.m;
+        for s in &m.stops {
+            let face = [s.yaw.sin(), s.yaw.cos()];
+            let along = [face[1], -face[0]];
+            let c = [s.x, s.z];
+            match s.kind {
+                stop::MEDIAN | stop::MEDIAN_SMART => {
+                    let smart = s.kind == stop::MEDIAN_SMART;
+                    let (hl, hw, ph) = (if smart { 24.0 } else { 15.0 }, 1.45, 0.22);
+                    let corner = |i: f32, j: f32| [c[0] + along[0] * hl * i + face[0] * hw * j, c[1] + along[1] * hl * i + face[1] * hw * j];
+                    let quad = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
+                    self.platforms.push((quad, ph));
+                    // Platform slab with a granite edge, safety fence on the traffic side.
+                    self.bx([c[0], 0.0, c[1]], yaw_of(along), [hw * 2.0, ph, hl * 2.0], rgb(0x9a9890));
+                    let edge = [c[0] + face[0] * (hw - 0.15), c[1] + face[1] * (hw - 0.15)];
+                    self.bx([edge[0], ph, edge[1]], yaw_of(along), [0.3, 0.005, hl * 2.0 - 0.4], rgb(0xd8d4c6));
+                    let back = [c[0] - face[0] * (hw - 0.06), c[1] - face[1] * (hw - 0.06)];
+                    self.bx([back[0], ph, back[1]], yaw_of(along), [0.05, 1.05, hl * 2.0 - 1.0], [180, 196, 200, 255]);
+                    self.bx([back[0], ph + 1.05, back[1]], yaw_of(along), [0.08, 0.05, hl * 2.0 - 1.0], rgb(0x4a4f55));
+                    self.obstacle(back, s.yaw, hl - 0.5, 0.08, 1.2);
+                    // Tactile line along the platform edge, dots at each berth door.
+                    self.tactile.extend_from_slice(&[edge[0] - face[0] * 0.45, 0.0, edge[1] - face[1] * 0.45, yaw_of(along), 0.3, hl * 2.0 - 1.0, TACTILE_LINES]);
+                    if smart {
+                        self.inst(M_SMART_SHELTER, [c[0] - face[0] * 0.2, ph, c[1] - face[1] * 0.2], s.yaw, [1.0, 1.0, 1.0]);
+                        self.obstacle([c[0] - face[0] * 0.2, c[1] - face[1] * 0.2], s.yaw, 6.2, 1.2, 3.2);
+                    } else {
+                        self.inst(M_SHELTER, [c[0] - face[0] * 0.35, ph, c[1] - face[1] * 0.35], s.yaw, [1.0, 1.0, 1.0]);
+                        self.obstacle([c[0] - face[0] * 0.9, c[1] - face[1] * 0.9], s.yaw, 3.9, 0.12, 2.6);
+                    }
+                }
+                stop::SHELTER | stop::SMART => {
+                    if ctx.in_building(c, 0.3) {
+                        continue;
+                    }
+                    self.inst(M_SHELTER, [c[0], 0.0, c[1]], s.yaw, [1.0, 1.0, 1.0]);
+                    let back = [c[0] - face[0] * 0.75, c[1] - face[1] * 0.75];
+                    self.obstacle(back, s.yaw, 3.9, 0.12, 2.6);
+                    let pad = [c[0] + face[0] * 1.0 + along[0] * 2.8, c[1] + face[1] * 1.0 + along[1] * 2.8];
+                    self.tactile.extend_from_slice(&[pad[0], 0.0, pad[1], s.yaw, 0.9, 0.6, TACTILE_DOTS]);
+                }
+                _ => {
+                    if ctx.in_building(c, 0.2) {
+                        continue;
+                    }
+                    self.inst(M_STOP_POLE, [c[0], 0.0, c[1]], s.yaw, [1.0, 1.0, 1.0]);
+                    self.obstacle(c, s.yaw, 0.12, 0.12, 3.0);
+                    let pad = [c[0] + along[0] * 0.8, c[1] + along[1] * 0.8];
+                    self.tactile.extend_from_slice(&[pad[0], 0.0, pad[1], s.yaw, 0.6, 0.6, TACTILE_DOTS]);
+                }
+            }
+        }
+    }
+
+    /// Second pass once the walking surface is known: crossing kit, then sit
+    /// ground-level props on raised pavements, ramps and platforms.
+    pub fn finish(&mut self, m: &MapData, g: &crate::kerb::Ground) {
+        let mut ctx = make_ctx(m);
+        self.place_crossing_kit(&mut ctx, g);
+        self.prim_count = self.cells.values().map(|v| v.len()).sum();
+        self.lift(g);
+    }
+
+    /// At every crosswalk end on a raised pavement: a band of dot blocks across
+    /// the ramp 30 cm back from the kerb with a guide line into the pavement
+    /// (교통약자 편의시설 기준), and on the main roads a folded shade parasol
+    /// (접이식 그늘막, wrapped for the winter from November).
+    fn place_crossing_kit(&mut self, ctx: &mut Ctx, g: &crate::kerb::Ground) {
+        let cw = self.crosswalks.clone();
+        for c in cw.chunks(5) {
+            let (sn, cs) = c[2].sin_cos();
+            let az = [sn, cs];
+            let ax = [cs, -sn];
+            let (half_w, half_l) = (c[3] * 0.5, c[4] * 0.5);
+            let Some((_, kind)) = ctx.road_near([c[0], c[1]], 0.0) else { continue };
+            let sw = crate::kerb::pavement_width(kind);
+            if sw <= 0.0 {
+                continue;
+            }
+            let mut rng = Rng::new((c[0] * 31.0) as i32 as u32 ^ ((c[1] * 17.0) as i32 as u32).rotate_left(11));
+            for side in [-1.0f32, 1.0] {
+                let out = [ax[0] * side, ax[1] * side];
+                let band = [c[0] + out[0] * (half_w + 0.6), c[1] + out[1] * (half_w + 0.6)];
+                // Only where this end of the crossing lands on a raised pavement
+                // (not the median of a dual carriageway).
+                let top = [c[0] + out[0] * (half_w + 2.0), c[1] + out[1] * (half_w + 2.0)];
+                if ctx.in_building(band, 0.0) || g.height(top) < crate::kerb::KERB_H - 0.01 {
+                    continue;
+                }
+                // Dot band across the crosswalk width (local x = along the kerb).
+                self.tactile.extend_from_slice(&[band[0], 0.0, band[1], yaw_of(out), half_l * 2.0, 0.6, TACTILE_DOTS]);
+                let line_len = (sw - 1.2).max(0.6);
+                let lc = [band[0] + out[0] * (0.3 + line_len * 0.5), band[1] + out[1] * (0.3 + line_len * 0.5)];
+                if !ctx.in_building(lc, 0.0) {
+                    self.tactile.extend_from_slice(&[lc[0], 0.0, lc[1], yaw_of(out), 0.3, line_len, TACTILE_LINES]);
+                }
+                let main = matches!(kind & !ONEWAY, road::PRIMARY | road::SECONDARY);
+                if main && rng.f() < 0.7 {
+                    let pp = [c[0] + out[0] * (half_w + 1.7) + az[0] * (half_l + 1.3), c[1] + out[1] * (half_w + 1.7) + az[1] * (half_l + 1.3)];
+                    if !ctx.in_building(pp, 1.0) && g.height(pp) > crate::kerb::KERB_H - 0.01 {
+                        self.inst(M_PARASOL, [pp[0], 0.0, pp[1]], rng.range(0.0, 6.28), [1.0, 1.0, 1.0]);
+                        self.obstacle(pp, 0.0, 0.25, 0.25, 3.0);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sit ground-level props on the walking surface (raised pavements, ramps, platforms).
+    fn lift(&mut self, g: &crate::kerb::Ground) {
+        for list in self.cells.values_mut() {
+            for pr in list.iter_mut() {
+                if pr.pos[1] < 0.35 && pr.shape != SHAPE_OCT && pr.shape != SHAPE_ICO {
+                    pr.pos[1] += g.height([pr.pos[0], pr.pos[2]]);
+                }
+            }
+        }
+        for list in self.insts.values_mut() {
+            for it in list.iter_mut() {
+                let m = it[0] as u8;
+                // Manholes sit in the carriageway; everything else follows the ground.
+                if it[2] < 0.35 && m != M_MANHOLE {
+                    it[2] += g.height([it[1], it[3]]);
+                }
+            }
+        }
+        for t in self.tactile.chunks_mut(7) {
+            t[1] = g.height([t[0], t[2]]);
         }
     }
 

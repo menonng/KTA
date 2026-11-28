@@ -42,10 +42,39 @@ impl Game {
         self.w.chunks[i as usize].bounds.to_vec()
     }
 
-    /// [pos_ptr, pos_len, attr_ptr, attr_len, idx_ptr, idx_len]
+    /// [pos_ptr, pos_len, attr_ptr, attr_len, idx_ptr, idx_len, nrm_ptr, nrm_len]
     pub fn roads_desc(&self) -> Vec<u32> {
         let r = &self.w.roads;
-        vec![ptr(&r.pos), r.pos.len() as u32, ptr(&r.attr), r.attr.len() as u32, ptr(&r.idx), r.idx.len() as u32]
+        vec![ptr(&r.pos), r.pos.len() as u32, ptr(&r.attr), r.attr.len() as u32, ptr(&r.idx), r.idx.len() as u32, ptr(&r.nrm), r.nrm.len() as u32]
+    }
+
+    /// Walking-surface height (raised pavements, kerb ramps, bus platforms).
+    pub fn ground_y(&self, x: f32, z: f32) -> f32 {
+        self.w.ground.height([x, z])
+    }
+
+    /// Pointer to one float per pedestrian: eased ground height under the feet.
+    pub fn ped_y_ptr(&self) -> u32 {
+        ptr(&self.w.ped_y)
+    }
+
+    /// Tactile paving: x, y, z, yaw, size x, size z, kind (0 dots, 1 lines).
+    pub fn tactile(&self) -> Vec<f32> {
+        self.w.props.tactile.clone()
+    }
+
+    /// Bus stops: x, z, yaw, kind per stop (kta_core::data::stop).
+    pub fn stops(&self) -> Vec<f32> {
+        self.w.map.stops.iter().flat_map(|s| [s.x, s.z, s.yaw, s.kind as f32]).collect()
+    }
+
+    pub fn stop_name(&self, i: u32) -> String {
+        self.w.map.stops.get(i as usize).map(|s| self.w.map.name(s.name).to_string()).unwrap_or_default()
+    }
+
+    /// Point features (signals, crossings): x, z, kind.
+    pub fn nodes(&self) -> Vec<f32> {
+        self.w.map.nodes.iter().flat_map(|n| [n.x, n.z, n.kind as f32]).collect()
     }
 
     pub fn free_meshes(&mut self) {

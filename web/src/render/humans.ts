@@ -348,7 +348,7 @@ export class People {
     }
   }
 
-  update(dt: number, px: number, pz: number, yaw: number, speed: number, crowd: Float32Array, camera: THREE.Camera) {
+  update(dt: number, px: number, py: number, pz: number, yaw: number, speed: number, crowd: Float32Array, crowdY: Float32Array, camera: THREE.Camera) {
     // Protagonist: idle / walk / run blended by speed, gait cycles kept in step.
     const k = this.hero.kind;
     const walk = k.walks[0];
@@ -382,7 +382,7 @@ export class People {
     this.heroLookY = ease(this.heroLookY, rel * (1 - 0.5 * wRun), 5, dt);
     this.heroLookP = ease(this.heroLookP, pitch * (1 - 0.6 * wMove), 5, dt);
     this.hero.begin();
-    this.hero.add(0, px, 0, pz, yaw, a, b, bl, 1, 1, this.heroLookY, this.heroLookP, this.lean);
+    this.hero.add(0, px, py, pz, yaw, a, b, bl, 1, 1, this.heroLookY, this.heroLookP, this.lean);
     this.hero.end();
 
     // Crowd.
@@ -420,7 +420,7 @@ export class People {
       const wc = this.walkOf[i];
       const u = crowd[o + 3] / (1.9 * layer.kind.stride[wc]);
       const [ra, rb, f] = layer.rows(wc, u);
-      layer.add(lod, x, 0, z, pyaw, ra, rb, f, this.scaleOf[i], this.shadeOf[i], lod < 2 ? this.lookY[i] : 0, lod < 2 ? this.lookP[i] : 0);
+      layer.add(lod, x, crowdY[i] ?? 0, z, pyaw, ra, rb, f, this.scaleOf[i], this.shadeOf[i], lod < 2 ? this.lookY[i] : 0, lod < 2 ? this.lookP[i] : 0);
       vis++;
     }
     for (const l of this.layers) l.end();

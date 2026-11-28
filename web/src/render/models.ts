@@ -8,16 +8,23 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { kitMaterials, parasol, shelter, smartShelter, speciesTrees, stopPole, type StreetKitMats } from './streetkit';
 
-/** Same order as the M_* model ids in crates/kta-core/src/props.rs. */
-export const MODEL_NAMES = ['aircon', 'powerbox', 'chair', 'crate', 'manhole', 'shutter', 'coveredcar', 'tree'] as const;
+/** Same order as the M_* model ids in crates/kta-core/src/props.rs (trees: M_TREE + species). */
+export const MODEL_NAMES = [
+  'aircon', 'powerbox', 'chair', 'crate', 'manhole', 'shutter', 'coveredcar',
+  'tree', 'tree_plane', 'tree_zelkova', 'tree_fringe', 'tree_cherry', 'tree_pagoda', 'tree_pine', 'tree_maple', 'tree_other',
+  'shelter', 'smartshelter', 'stoppole', 'parasol',
+] as const;
+const TREES = 7;
+const N_TREES = 9;
+const isTree = (m: number) => m >= TREES && m < TREES + N_TREES;
 export const MODEL = Object.fromEntries(MODEL_NAMES.map((n, i) => [n, i])) as Record<(typeof MODEL_NAMES)[number], number>;
 
 // Only the larger pieces cast shadows; small ones would double their cost.
-const CASTS = new Set<number>([MODEL.powerbox, MODEL.coveredcar, MODEL.tree]);
+const CASTS = new Set<number>([MODEL.powerbox, MODEL.coveredcar, ...Array.from({ length: N_TREES }, (_, i) => TREES + i), MODEL.shelter, MODEL.smartshelter]);
 /** Draw distance per model (m): small pieces are invisible beyond this anyway. */
-const RANGE = [72, 170, 55, 50, 90, 140, 190, 230];
+const RANGE = [72, 170, 55, 50, 90, 140, 190, ...Array(N_TREES).fill(230), 160, 220, 90, 110];
 
 export interface ModelInst {
   m: number;
@@ -47,6 +54,7 @@ export class ModelLayer {
   private cullAt = { x: 1e9, z: 1e9 };
   private recull = new Set<number>();
   private loaded = false;
+  private kit: StreetKitMats = kitMaterials();
   texBytes = 0;
   instances = 0;
 
@@ -58,10 +66,23 @@ export class ModelLayer {
     const ktx2 = new KTX2Loader().setTranscoderPath('basis/').detectSupport(this.renderer);
     const loader = new GLTFLoader().setKTX2Loader(ktx2).setMeshoptDecoder(MeshoptDecoder);
     const seen = new Set<THREE.Texture>();
+    const I = new THREE.Matrix4();
+    const asParts = (kp: { geo: THREE.BufferGeometry; mat: THREE.Material }[]): Part[] => kp.map((k) => ({ geo: k.geo, mat: k.mat, local: I, mesh: null }));
+    const kitBuilders: Record<string, (m: StreetKitMats) => { geo: THREE.BufferGeometry; mat: THREE.Material }[]> = {
+      shelter,
+      smartshelter: smartShelter,
+      stoppole: stopPole,
+      parasol,
+    };
+    const treeTex = Promise.all(['tree_cards', 'tree_bark_sp', 'tree_bark_n'].map((n) => ktx2.loadAsync(`textures/${n}.ktx2`))).then(([c, b, n]) => speciesTrees(c, b, n));
     await Promise.all(
       MODEL_NAMES.map(async (name, mi) => {
-        if (name === 'tree') {
-          this.parts[mi] = await buildTree(ktx2);
+        if (isTree(mi)) {
+          this.parts[mi] = asParts((await treeTex)[mi - TREES]);
+          return;
+        }
+        if (kitBuilders[name]) {
+          this.parts[mi] = asParts(kitBuilders[name](this.kit));
           return;
         }
         const gltf = await loader.loadAsync(`models/${name}.glb`);
@@ -93,6 +114,11 @@ export class ModelLayer {
     this.flush();
   }
 
+  /** Night level 0..1: lights of shelters, displays and adverts. */
+  setNight(v: number) {
+    this.kit.light.emissiveIntensity = 0.25 + 1.5 * v;
+  }
+
   /** Replace (or add) a named set of instances. */
   set(key: string, list: ModelInst[]) {
     const old = this.sets.get(key);
@@ -122,8 +148,8 @@ export class ModelLayer {
     const TREE_TINT = [0xffffff, 0xfff4dc, 0xf2f0c8, 0xffe9c0, 0xe4ecc0];
     for (let i = 0; i + 7 < a.length; i += 8) {
       const it: ModelInst = { m: a[i], x: a[i + 1], y: a[i + 2], z: a[i + 3], yaw: a[i + 4], sx: a[i + 5], sy: a[i + 6], sz: a[i + 7] };
-      // Each ginkgo turns at its own pace: vary the crown tint a little.
-      if (it.m === MODEL.tree) it.color = TREE_TINT[(Math.abs(Math.floor(it.x * 7.1 + it.z * 3.7)) % TREE_TINT.length)];
+      // Each tree turns at its own pace: vary the crown tint a little.
+      if (isTree(it.m)) it.color = TREE_TINT[(Math.abs(Math.floor(it.x * 7.1 + it.z * 3.7)) % TREE_TINT.length)];
       out.push(it);
     }
     return out;
@@ -232,70 +258,4 @@ export function storefrontFurniture(fronts: { x: number; z: number; yaw: number;
     }
   }
   return out;
-}
-
-/**
- * Ginkgo street tree (procedural): tapered bark trunk with a few limbs and a
- * crown of crossed leaf cards (painted ginkgo leaf clusters, alpha-tested)
- * with normals bent outward from the crown centre for soft volume shading.
- */
-async function buildTree(ktx2: KTX2Loader): Promise<Part[]> {
-  const [leaf, bark, barkN] = await Promise.all(['tree_leaves', 'tree_bark', 'tree_bark_n'].map((n) => ktx2.loadAsync(`textures/${n}.ktx2`)));
-  for (const t of [bark, barkN]) t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  leaf.colorSpace = THREE.SRGBColorSpace;
-  bark.colorSpace = THREE.SRGBColorSpace;
-  let seed = 11;
-  const r = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
-
-  // Trunk and limbs.
-  const wood: THREE.BufferGeometry[] = [];
-  const trunk = new THREE.CylinderGeometry(0.1, 0.17, 4.8, 8, 1, true).translate(0, 2.4, 0);
-  const uv = trunk.getAttribute('uv') as THREE.BufferAttribute;
-  for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 2, uv.getY(i) * 4);
-  wood.push(trunk);
-  for (let k = 0; k < 4; k++) {
-    const len = 1.6 + r() * 0.9;
-    const limb = new THREE.CylinderGeometry(0.025, 0.07, len, 5, 1, true).translate(0, len / 2, 0);
-    limb.rotateZ(0.35 + r() * 0.3);
-    limb.rotateY((k / 4) * Math.PI * 2 + r() * 0.8);
-    limb.translate(0, 3.3 + r() * 1.1, 0);
-    wood.push(limb);
-  }
-  const woodGeo = mergeGeometries(wood)!;
-  const woodMat = new THREE.MeshStandardMaterial({ map: bark, normalMap: barkN, roughness: 0.92 });
-
-  // Crown: cards on a tall ellipsoid (young street ginkgos are columnar).
-  const cards: THREE.BufferGeometry[] = [];
-  const centre = new THREE.Vector3(0, 6.1, 0);
-  const n = 16;
-  for (let i = 0; i < n; i++) {
-    const y = 1 - (2 * (i + 0.5)) / n;
-    const ring = Math.sqrt(1 - y * y);
-    const a = i * 2.39996 + r() * 0.3;
-    const pos = new THREE.Vector3(Math.cos(a) * ring * 1.35, y * 2.3, Math.sin(a) * ring * 1.35).add(centre);
-    const size = 2.1 + r() * 0.7;
-    const card = new THREE.PlaneGeometry(size, size);
-    card.rotateY(r() * Math.PI);
-    card.rotateX((r() - 0.5) * 0.9);
-    card.translate(pos.x, pos.y, pos.z);
-    cards.push(card);
-  }
-  const crown = mergeGeometries(cards)!;
-  const p = crown.getAttribute('position') as THREE.BufferAttribute;
-  const nrm = crown.getAttribute('normal') as THREE.BufferAttribute;
-  const v = new THREE.Vector3();
-  for (let i = 0; i < p.count; i++) {
-    v.set(p.getX(i), p.getY(i), p.getZ(i)).sub(centre);
-    v.y *= 0.6;
-    v.normalize();
-    nrm.setXYZ(i, v.x, v.y * 0.8 + 0.25, v.z);
-  }
-  crown.computeBoundingSphere();
-  woodGeo.computeBoundingSphere();
-  const leafMat = new THREE.MeshStandardMaterial({ map: leaf, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.75 });
-  const I = new THREE.Matrix4();
-  return [
-    { geo: woodGeo, mat: woodMat, local: I, mesh: null },
-    { geo: crown, mat: leafMat, local: I, mesh: null },
-  ];
 }
