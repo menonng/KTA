@@ -2,6 +2,7 @@
 // Building facades (windows, shopfronts, colors, lit windows at night) are
 // computed in the fragment shader, so the city uses no textures at all.
 
+import { SURFACE } from './surface';
 import * as THREE from 'three';
 import type { Game } from '../wasm/kta_wasm.js';
 import type { TextureSet } from './textures';
@@ -114,6 +115,7 @@ if (fRoof > 0.5) {
   fNt = texture(tWallN, vec3(uv, 8.0)).xyz * 2.0 - 1.0;
   if (kH1(fSeed * 3.7) > 0.86) fCol *= vec3(0.62, 0.95, 0.66);
   else if (kH1(fSeed * 5.3) > 0.82) fCol *= vec3(0.6, 0.92, 0.9);
+  fCol = mix(fCol, vec3(0.86, 0.88, 0.92), uSnow * smoothstep(0.25, 0.5, kN(vec2(fU, fV) * 0.4) + 0.2));
 } else {
   float r = kH1(fSeed * 1.37 + 3.1);
   float layer = 2.0;
@@ -237,6 +239,7 @@ if (fRoof > 0.5) {
     fCol = mix(fCol, vec3(0.78, 0.79, 0.8), frameW);
   }
   if (fH - fV < 0.32) fCol *= 0.82;
+  fCol *= 1.0 - 0.18 * uWet;
 }
 diffuseColor.rgb = fCol;
 `;
@@ -288,6 +291,18 @@ if (rK < 3.5 || rK > 7.5) {
   if (edge > 0.3 && edge < 0.45) rc = mix(rc, wht, wear);
 }
 diffuseColor.rgb = rc;
+snowMask = mix(0.3, 1.0, smoothstep(rHw - 1.4, rHw - 0.2, abs(rX)));
+`;
+
+// Rain: darker, glossy ground with puddles. Snow: patchy cover, thinner on
+// the carriageway (snowMask from the road body).
+const SURFACE_WEATHER = /* glsl */ `
+float puddle = smoothstep(0.56, 0.7, kN(vGP.xz * 0.11) * 0.7 + kN(vGP.xz * 0.6) * 0.3) * uWet;
+diffuseColor.rgb *= mix(1.0, 0.6, uWet);
+diffuseColor.rgb *= 1.0 - 0.3 * puddle;
+float snowN = kN(vGP.xz * 0.35) * 0.6 + kN(vGP.xz * 1.9) * 0.4;
+float snowC = uSnow * smoothstep(0.3, 0.5, snowN * snowMask + 0.2 * snowMask);
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.84, 0.86, 0.9), snowC);
 `;
 
 // Cotangent-frame normal mapping for flat ground surfaces.
@@ -333,20 +348,22 @@ export function createBuildingMaterial(night: { value: number }, tex: TextureSet
     s.uniforms.tWallN = { value: tex.wallN };
     s.uniforms.uTop = sky.uTop;
     s.uniforms.uHorizon = sky.uHorizon;
+    s.uniforms.uWet = SURFACE.uWet;
+    s.uniforms.uSnow = SURFACE.uSnow;
     s.vertexShader = s.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec4 aFacade;\nvarying vec2 vFacade;\nflat varying vec2 vFacadeId;\nvarying vec3 vWP;\nvarying vec3 vWN;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFacade = aFacade.xy;\nvFacadeId = aFacade.zw;\nvWP = (modelMatrix * vec4(position, 1.0)).xyz;\nvWN = normalize(mat3(modelMatrix) * normal);');
     s.fragmentShader = s.fragmentShader
       .replace(
         '#include <common>',
-        `#include <common>\nprecision highp sampler2DArray;\nuniform float uNight;\nuniform vec3 uTop;\nuniform vec3 uHorizon;\nuniform sampler2DArray tWallA;\nuniform sampler2DArray tWallN;\nvarying vec2 vFacade;\nflat varying vec2 vFacadeId;\nvarying vec3 vWP;\nvarying vec3 vWN;\n${HASH}\n${INTERIOR}`,
+        `#include <common>\nprecision highp sampler2DArray;\nuniform float uNight;\nuniform float uWet;\nuniform float uSnow;\nuniform vec3 uTop;\nuniform vec3 uHorizon;\nuniform sampler2DArray tWallA;\nuniform sampler2DArray tWallN;\nvarying vec2 vFacade;\nflat varying vec2 vFacadeId;\nvarying vec3 vWP;\nvarying vec3 vWN;\n${HASH}\n${INTERIOR}`,
       )
       .replace('#include <color_fragment>', `#include <color_fragment>\n${FACADE}`)
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = fRough;')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FACADE_NORMAL}`)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += fEmis;');
   };
-  m.customProgramCacheKey = () => 'kta-facade-tex-5';
+  m.customProgramCacheKey = () => 'kta-facade-tex-6';
   return m;
 }
 
@@ -354,13 +371,16 @@ function groundShader(tex: TextureSet, body: string, extraVert: string) {
   return (s: THREE.WebGLProgramParametersWithUniforms) => {
     s.uniforms.tGroundA = { value: tex.groundA };
     s.uniforms.tGroundN = { value: tex.groundN };
+    s.uniforms.uWet = SURFACE.uWet;
+    s.uniforms.uSnow = SURFACE.uSnow;
     s.vertexShader = s.vertexShader
       .replace('#include <common>', `#include <common>\nvarying vec3 vGP;\nvarying vec3 vGN;\n${extraVert}`)
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGP = (modelMatrix * vec4(position, 1.0)).xyz;\nvGN = vec3(0.0, 1.0, 0.0);');
     s.fragmentShader = s.fragmentShader
-      .replace('#include <common>', `#include <common>\nprecision highp sampler2DArray;\nuniform sampler2DArray tGroundA;\nuniform sampler2DArray tGroundN;\nvarying vec3 vGP;\nvarying vec3 vGN;\n${HASH}`)
-      .replace('#include <color_fragment>', `#include <color_fragment>\n${body}`)
-      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${GROUND_NORMAL}`);
+      .replace('#include <common>', `#include <common>\nprecision highp sampler2DArray;\nuniform sampler2DArray tGroundA;\nuniform sampler2DArray tGroundN;\nuniform float uWet;\nuniform float uSnow;\nvarying vec3 vGP;\nvarying vec3 vGN;\n${HASH}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>\nfloat snowMask = 1.0;\n${body}\n${SURFACE_WEATHER}`)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, mix(0.3, 0.03, puddle), uWet);\nroughnessFactor = mix(roughnessFactor, 0.6, snowC);')
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\ngNt = mix(gNt, vec3(0.0, 0.0, 1.0), max(puddle, snowC));\n${GROUND_NORMAL}`);
   };
 }
 
@@ -372,7 +392,7 @@ export function createRoadMaterial(tex: TextureSet) {
     s.vertexShader = s.vertexShader.replace('vGN = vec3(0.0, 1.0, 0.0);', 'vGN = vec3(0.0, 1.0, 0.0);\nvRoad = aRoad;');
     s.fragmentShader = s.fragmentShader.replace('varying vec3 vGN;', 'varying vec3 vGN;\nvarying vec4 vRoad;');
   };
-  m.customProgramCacheKey = () => 'kta-road-tex-1';
+  m.customProgramCacheKey = () => 'kta-road-tex-2';
   return m;
 }
 
@@ -385,7 +405,7 @@ export function createGroundMaterial(tex: TextureSet) {
      diffuseColor.rgb = texture(tGroundA, vec3(guv, 1.0)).rgb * (0.88 + 0.2 * kN(vGP.xz * 0.08));`,
     '',
   );
-  m.customProgramCacheKey = () => 'kta-ground-tex-1';
+  m.customProgramCacheKey = () => 'kta-ground-tex-2';
   return m;
 }
 

@@ -13,6 +13,8 @@ import { Post } from './render/post';
 import { loadTextures } from './render/textures';
 import { PropStreamer, buildStreetDetails } from './render/props';
 import { ModelLayer, MODEL, storefrontFurniture, type ModelInst } from './render/models';
+import { Precipitation } from './render/weather';
+import { WEATHERS, type Weather } from './render/environment';
 
 const params = new URLSearchParams(location.search);
 const BENCH = params.has('bench');
@@ -85,6 +87,13 @@ async function boot() {
     models.flush();
   });
   const post = new Post(renderer);
+  const precip = new Precipitation();
+  scene.add(precip.group);
+  const setWeather = (w: Weather) => {
+    env.setWeather(w);
+    precip.set(w);
+  };
+  setWeather((params.get('weather') as Weather) || 'clear');
 
   const player = new Protagonist();
   scene.add(player.root);
@@ -122,6 +131,7 @@ async function boot() {
   hud.debug.classList.toggle('on', debugOn);
   input.onKey = (code) => {
     if (code === 'KeyN') hours = hours > 6 && hours < 18 ? 21.0 : 13.0;
+    if (code === 'KeyB') setWeather(WEATHERS[(WEATHERS.indexOf(env.weather) + 1) % WEATHERS.length]);
     if (code === 'F3') {
       debugOn = !debugOn;
       hud.debug.classList.toggle('on', debugOn);
@@ -155,6 +165,7 @@ async function boot() {
 
   const api = {
     setTime: (h: number) => (hours = h),
+    setWeather: (w: Weather) => setWeather(w),
     teleport: (x: number, z: number) => {
       game.spawn(x, z);
       props.update(x, z, 0, true);
@@ -299,6 +310,11 @@ async function boot() {
     camera.position.set(px + ox * camDist, 1.6 + oy * camDist, pz + oz * camDist);
     camera.lookAt(camTarget);
 
+    post.atmo.lut = env.lut.texture;
+    post.atmo.density = env.fog.density;
+    post.atmo.falloff = env.fog.falloff;
+    post.atmo.wet = env.surface.uWet.value;
+    precip.update(dt, camera.position, env.night.value);
     post.render(scene, camera, env.grade);
 
     if (now - lastHud > 100) {

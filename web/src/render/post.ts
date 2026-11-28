@@ -118,6 +118,16 @@ uniform sampler2D tScene;
 uniform sampler2D tBloom;
 uniform sampler2D tAO;
 uniform float uAO;
+uniform sampler2D tDepth;
+uniform sampler2D tSkyLUT;
+uniform mat4 uProjInvC;
+uniform mat4 uProjC;
+uniform mat4 uViewInv;
+uniform mat4 uView;
+uniform vec3 uCamPos;
+uniform float uFogDensity;
+uniform float uFogFalloff;
+uniform float uWet;
 uniform float uExposure;
 uniform vec3 uTint;
 uniform vec3 uShadow;
@@ -150,11 +160,64 @@ vec3 fxaa(vec2 uv) {
   float lB = lumP(b);
   return (lB < lMin || lB > lMax) ? a : b;
 }
+vec3 worldAt(vec2 uv, float d) {
+  vec4 v = uProjInvC * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+  return (uViewInv * vec4(v.xyz / v.w, 1.0)).xyz;
+}
+float nH(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float nV(vec2 p) {
+  vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(nH(i), nH(i + vec2(1.0, 0.0)), f.x), mix(nH(i + vec2(0.0, 1.0)), nH(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+vec3 skyAt(vec3 dir, float lod) {
+  vec3 d = normalize(vec3(dir.x, max(dir.y, 0.015), dir.z));
+  vec2 luv = vec2(atan(d.z, d.x) * 0.15915494 + 0.5, asin(clamp(d.y, -1.0, 1.0)) * 0.31830989 + 0.5);
+  return textureLod(tSkyLUT, luv, lod).rgb;
+}
 vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
 vec3 toSRGB(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 void main() {
   float ao = mix(1.0, texture2D(tAO, vUv).r, uAO);
-  vec3 c = fxaa(vUv) * ao + texture2D(tBloom, vUv).rgb * uBloom;
+  vec3 c = fxaa(vUv) * ao;
+  float dz = texture2D(tDepth, vUv).x;
+  if (dz < 0.99999) {
+    vec3 wp = worldAt(vUv, dz);
+    vec3 rd = wp - uCamPos;
+    float dist = length(rd);
+    vec3 dir = rd / max(dist, 1e-3);
+    // Wet streets: screen-space reflection of the city in the ground plane.
+    if (uWet > 0.0 && wp.y < 0.3 && dist < 90.0) {
+      vec3 R = reflect(dir, vec3(0.0, 1.0, 0.0));
+      float pud = smoothstep(0.5, 0.72, nV(wp.xz * 0.11) * 0.7 + nV(wp.xz * 0.6) * 0.3);
+      float fres = 0.08 + 0.92 * pow(1.0 - max(-dir.y, 0.0), 5.0);
+      float strength = uWet * mix(0.35, 0.95, pud) * fres;
+      vec3 refl = skyAt(R, 3.0);
+      float t = 0.6;
+      for (int i = 0; i < 18; i++) {
+        vec3 p = wp + R * t;
+        vec4 cp = uProjC * (uView * vec4(p, 1.0));
+        vec2 suv = cp.xy / cp.w * 0.5 + 0.5;
+        if (suv.x < 0.0 || suv.x > 1.0 || suv.y < 0.0 || suv.y > 1.0) break;
+        vec3 sp = worldAt(suv, texture2D(tDepth, suv).x);
+        float sceneDist = length(sp - uCamPos);
+        float rayDist = length(p - uCamPos);
+        if (sceneDist < rayDist - 0.05 && rayDist - sceneDist < t * 0.35 + 0.6) {
+          refl = texture2D(tScene, suv).rgb;
+          break;
+        }
+        t *= 1.28;
+      }
+      c = mix(c, refl, clamp(strength, 0.0, 0.85));
+    }
+    // Aerial perspective: exponential height fog lit by the sky in that direction.
+    float k = uFogFalloff;
+    float h0 = max(uCamPos.y, 0.0);
+    float ky = k * rd.y;
+    float integ = abs(ky) > 1e-4 ? (1.0 - exp(-ky)) / ky : 1.0;
+    float fogA = 1.0 - exp(-uFogDensity * exp(-k * h0) * dist * integ);
+    c = mix(c, skyAt(dir, 3.5) * 0.9, clamp(fogA, 0.0, 0.92));
+  }
+  c += texture2D(tBloom, vUv).rgb * uBloom;
   c *= uExposure * uTint / 0.6; // same pre-scale as three.js ACESFilmic
   float L = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c *= mix(uShadow, uHigh, smoothstep(0.02, 0.8, L));
@@ -185,6 +248,8 @@ export class Post {
   private ao!: THREE.WebGLRenderTarget;
   private aoBlur!: THREE.WebGLRenderTarget;
   aoStrength = 0.75;
+  /** Atmosphere inputs (set by main from the Environment). */
+  atmo: { lut: THREE.Texture | null; density: number; falloff: number; wet: number } = { lut: null, density: 0.002, falloff: 0.01, wet: 0 };
   bytes = 0;
 
   constructor(private renderer: THREE.WebGLRenderer) {
@@ -245,8 +310,19 @@ export class Post {
       depthTest: false,
       depthWrite: false,
     });
-    this.compMat.uniforms.tAO = { value: null };
-    this.compMat.uniforms.uAO = { value: 0.75 };
+    const cu = this.compMat.uniforms;
+    cu.tAO = { value: null };
+    cu.uAO = { value: 0.75 };
+    cu.tDepth = { value: null };
+    cu.tSkyLUT = { value: null };
+    cu.uProjInvC = { value: new THREE.Matrix4() };
+    cu.uProjC = { value: new THREE.Matrix4() };
+    cu.uViewInv = { value: new THREE.Matrix4() };
+    cu.uView = { value: new THREE.Matrix4() };
+    cu.uCamPos = { value: new THREE.Vector3() };
+    cu.uFogDensity = { value: 0.002 };
+    cu.uFogFalloff = { value: 0.01 };
+    cu.uWet = { value: 0 };
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.compMat);
     this.quad.frustumCulled = false;
     this.qscene.add(this.quad);
@@ -339,6 +415,16 @@ export class Post {
     u.tBloom.value = this.up[0].texture;
     u.tAO.value = this.aoBlur.texture;
     u.uAO.value = this.aoStrength;
+    u.tDepth.value = this.scene.depthTexture;
+    u.tSkyLUT.value = this.atmo.lut;
+    u.uProjInvC.value.copy(cam.projectionMatrixInverse);
+    u.uProjC.value.copy(cam.projectionMatrix);
+    u.uViewInv.value.copy(cam.matrixWorld);
+    u.uView.value.copy(cam.matrixWorldInverse);
+    u.uCamPos.value.setFromMatrixPosition(cam.matrixWorld);
+    u.uFogDensity.value = this.atmo.lut ? this.atmo.density : 0;
+    u.uFogFalloff.value = this.atmo.falloff;
+    u.uWet.value = this.atmo.wet;
     u.uExposure.value = g.exposure;
     u.uTint.value.copy(g.tint);
     u.uShadow.value.copy(g.shadow);
